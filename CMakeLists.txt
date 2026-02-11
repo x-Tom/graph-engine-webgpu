@@ -23,6 +23,8 @@ add_executable(App
 	main.cpp
 	Application.h
 	Application.cpp
+	GraphObjects.h
+	GraphObjects.cpp
 	ResourceManager.h
 	ResourceManager.cpp
 	implementations.cpp

@@ -1,5 +1,6 @@
 #include "Application.h"
 #include "ResourceManager.h"
+#include "GraphObjects.h"
 
 #include <glfw3webgpu.h>
 #include <GLFW/glfw3.h>
@@ -53,6 +54,7 @@ bool Application::onInit() {
 
 	if (!initRenderPipeline("boat", RESOURCE_DIR "/shader.wgsl", WGPUPrimitiveTopology_TriangleList)) return false;
 	if (!initRenderPipeline("axes", RESOURCE_DIR "/axes.wgsl", WGPUPrimitiveTopology_LineList)) return false;
+	if (!initRenderPipeline("surface", RESOURCE_DIR "/surface.wgsl", WGPUPrimitiveTopology_TriangleList)) return false;
 
 
 	if (!initTexture()) return false;
@@ -75,8 +77,8 @@ bool Application::onInit() {
 	if (!initLightingUniforms()) return false;
 	// std::cout << "Passed [4]" << std::endl;
 	if (!initBindGroup()) return false;
+	if (!initGraphObjects()) return false;
 	if (!initGui()) return false;
-	// std::cout << "Passed [end]" << std::endl;
 	return true;
 }
 
@@ -84,6 +86,7 @@ void Application::onFrame() {
 	glfwPollEvents();
 	updateDragInertia();
 	updateLightingUniforms();
+	updateGraphObjects();
 
 	// Update uniform buffer
 	m_uniforms.time = static_cast<float>(glfwGetTime());
@@ -160,7 +163,21 @@ void Application::onFrame() {
 	wgpuRenderPassEncoderSetBindGroup(renderPass, 0, m_bindGroup, 0, nullptr);
 	wgpuRenderPassEncoderDraw(renderPass, m_axesVertexCount, 1, 0, 0);
 
+	// Draw surfaces + arrows (TriangleList, "surface" pipeline)
+	if (m_surfaceVertexCount > 0 && m_surfaceVertexBuffer) {
+		wgpuRenderPassEncoderSetPipeline(renderPass, m_pipelines["surface"]);
+		wgpuRenderPassEncoderSetVertexBuffer(renderPass, 0, m_surfaceVertexBuffer, 0, m_surfaceVertexCount * sizeof(VertexAttributes));
+		wgpuRenderPassEncoderSetBindGroup(renderPass, 0, m_bindGroup, 0, nullptr);
+		wgpuRenderPassEncoderDraw(renderPass, m_surfaceVertexCount, 1, 0, 0);
+	}
 
+	// Draw curves (LineList, reuse "axes" pipeline)
+	if (m_curveVertexCount > 0 && m_curveVertexBuffer) {
+		wgpuRenderPassEncoderSetPipeline(renderPass, m_pipelines["axes"]);
+		wgpuRenderPassEncoderSetVertexBuffer(renderPass, 0, m_curveVertexBuffer, 0, m_curveVertexCount * sizeof(VertexAttributes));
+		wgpuRenderPassEncoderSetBindGroup(renderPass, 0, m_bindGroup, 0, nullptr);
+		wgpuRenderPassEncoderDraw(renderPass, m_curveVertexCount, 1, 0, 0);
+	}
 
 	// We add the GUI drawing commands to the render pass
 	updateGui(renderPass);
@@ -194,6 +211,7 @@ void Application::onFrame() {
 
 void Application::onFinish() {
 	terminateGui();
+	terminateGraphObjects();
 	terminateBindGroup();
 	terminateLightingUniforms();
 	terminateUniforms();
@@ -1364,6 +1382,185 @@ void Application::updateDragInertia() {
 	}
 }
 
+// ─── Graph Objects ──────────────────────────────────────────────────────────
+
+bool Application::initGraphObjects() {
+	updateGraphObjects();
+	return true;
+}
+
+void Application::terminateGraphObjects() {
+	if (m_surfaceVertexBuffer) {
+		wgpuBufferDestroy(m_surfaceVertexBuffer);
+		wgpuBufferRelease(m_surfaceVertexBuffer);
+		m_surfaceVertexBuffer = nullptr;
+		m_surfaceVertexCount = 0;
+	}
+	if (m_curveVertexBuffer) {
+		wgpuBufferDestroy(m_curveVertexBuffer);
+		wgpuBufferRelease(m_curveVertexBuffer);
+		m_curveVertexBuffer = nullptr;
+		m_curveVertexCount = 0;
+	}
+}
+
+void Application::updateGraphObjects() {
+	if (!m_graphObjectsDirty) return;
+	m_graphObjectsDirty = false;
+
+	// Destroy old buffers
+	if (m_surfaceVertexBuffer) {
+		wgpuBufferDestroy(m_surfaceVertexBuffer);
+		wgpuBufferRelease(m_surfaceVertexBuffer);
+		m_surfaceVertexBuffer = nullptr;
+		m_surfaceVertexCount = 0;
+	}
+	if (m_curveVertexBuffer) {
+		wgpuBufferDestroy(m_curveVertexBuffer);
+		wgpuBufferRelease(m_curveVertexBuffer);
+		m_curveVertexBuffer = nullptr;
+		m_curveVertexCount = 0;
+	}
+
+	// ── Collect surface vertices (surfaces + arrows) ──
+	std::vector<VertexAttributes> surfaceVerts;
+
+	if (m_showParametricSurface) {
+		std::function<vec3(float, float)> surfFunc;
+		switch (m_surfaceExample) {
+		case 0: // z = sin(x)*cos(y)
+			surfFunc = [](float u, float v) -> vec3 {
+				return vec3(u, v, sinf(u) * cosf(v));
+			};
+			break;
+		case 1: // Sphere
+			surfFunc = [](float u, float v) -> vec3 {
+				return vec3(2.0f * cosf(u) * sinf(v), 2.0f * sinf(u) * sinf(v), 2.0f * cosf(v));
+			};
+			break;
+		case 2: // Torus
+			surfFunc = [](float u, float v) -> vec3 {
+				float R = 2.0f, r = 0.7f;
+				return vec3((R + r * cosf(v)) * cosf(u), (R + r * cosf(v)) * sinf(u), r * sinf(v));
+			};
+			break;
+		case 3: // Mobius strip
+			surfFunc = [](float u, float v) -> vec3 {
+				float half_v = v * 0.5f;
+				return vec3(
+					(1.0f + half_v * cosf(u * 0.5f)) * cosf(u),
+					(1.0f + half_v * cosf(u * 0.5f)) * sinf(u),
+					half_v * sinf(u * 0.5f)
+				);
+			};
+			break;
+		default:
+			surfFunc = [](float u, float v) -> vec3 {
+				return vec3(u, v, sinf(u) * cosf(v));
+			};
+			break;
+		}
+
+		auto verts = GraphObjects::generateParametricSurface(
+			surfFunc,
+			m_surfaceUMin, m_surfaceUMax, m_surfaceVMin, m_surfaceVMax,
+			m_surfaceResolution, m_surfaceResolution, true);
+		surfaceVerts.insert(surfaceVerts.end(), verts.begin(), verts.end());
+	}
+
+	if (m_showVectorField) {
+		std::function<vec3(vec3)> fieldFunc;
+		switch (m_vfExample) {
+		case 0: // Rotation
+			fieldFunc = [](vec3 p) -> vec3 { return vec3(-p.y, p.x, 0); };
+			break;
+		case 1: // Spiral
+			fieldFunc = [](vec3 p) -> vec3 { return vec3(-p.y, p.x, sinf(p.z)); };
+			break;
+		case 2: // Source/Radial
+			fieldFunc = [](vec3 p) -> vec3 {
+				float len = glm::length(p);
+				if (len < 0.01f) return vec3(0);
+				return p / len;
+			};
+			break;
+		default:
+			fieldFunc = [](vec3 p) -> vec3 { return vec3(-p.y, p.x, 0); };
+			break;
+		}
+
+		glm::ivec3 res(m_vfResolution);
+		auto verts = GraphObjects::generateVectorField(
+			fieldFunc,
+			vec3(m_vfRangeMin), vec3(m_vfRangeMax), res,
+			m_vfArrowScale);
+		surfaceVerts.insert(surfaceVerts.end(), verts.begin(), verts.end());
+	}
+
+	// Upload surface buffer
+	if (!surfaceVerts.empty()) {
+		WGPUBufferDescriptor bufferDesc = {};
+		bufferDesc.size = surfaceVerts.size() * sizeof(VertexAttributes);
+		bufferDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_Vertex;
+		bufferDesc.mappedAtCreation = false;
+		m_surfaceVertexBuffer = wgpuDeviceCreateBuffer(m_device, &bufferDesc);
+		wgpuQueueWriteBuffer(m_queue, m_surfaceVertexBuffer, 0, surfaceVerts.data(), bufferDesc.size);
+		m_surfaceVertexCount = static_cast<int>(surfaceVerts.size());
+	}
+
+	// ── Collect curve vertices ──
+	std::vector<VertexAttributes> curveVerts;
+
+	if (m_showParametricCurve) {
+		std::function<vec3(float)> curveFunc;
+		vec3 curveColor(1.0f, 1.0f, 0.0f);
+		switch (m_curveExample) {
+		case 0: // Helix
+			curveFunc = [](float t) -> vec3 {
+				return vec3(cosf(t), sinf(t), t / (2.0f * 3.14159f));
+			};
+			curveColor = vec3(1.0f, 1.0f, 0.0f);
+			break;
+		case 1: // Trefoil knot
+			curveFunc = [](float t) -> vec3 {
+				return vec3(
+					sinf(t) + 2.0f * sinf(2.0f * t),
+					cosf(t) - 2.0f * cosf(2.0f * t),
+					-sinf(3.0f * t)
+				);
+			};
+			curveColor = vec3(1.0f, 0.3f, 0.8f);
+			break;
+		case 2: // Lissajous
+			curveFunc = [](float t) -> vec3 {
+				return vec3(2.0f * sinf(2.0f * t), 2.0f * sinf(3.0f * t), 2.0f * cosf(5.0f * t));
+			};
+			curveColor = vec3(0.3f, 1.0f, 0.5f);
+			break;
+		default:
+			curveFunc = [](float t) -> vec3 {
+				return vec3(cosf(t), sinf(t), t / (2.0f * 3.14159f));
+			};
+			break;
+		}
+
+		auto verts = GraphObjects::generateParametricCurve(
+			curveFunc, m_curveTMin, m_curveTMax, m_curveSegments, curveColor);
+		curveVerts.insert(curveVerts.end(), verts.begin(), verts.end());
+	}
+
+	// Upload curve buffer
+	if (!curveVerts.empty()) {
+		WGPUBufferDescriptor bufferDesc = {};
+		bufferDesc.size = curveVerts.size() * sizeof(VertexAttributes);
+		bufferDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_Vertex;
+		bufferDesc.mappedAtCreation = false;
+		m_curveVertexBuffer = wgpuDeviceCreateBuffer(m_device, &bufferDesc);
+		wgpuQueueWriteBuffer(m_queue, m_curveVertexBuffer, 0, curveVerts.data(), bufferDesc.size);
+		m_curveVertexCount = static_cast<int>(curveVerts.size());
+	}
+}
+
 bool Application::initGui() {
 	// Setup Dear ImGui context
 	IMGUI_CHECKVERSION();
@@ -1389,21 +1586,90 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 
 	// Build our UI
 	{
-		// bool changed = false;
-		// ImGui::Begin("Lighting");
-		// changed = ImGui::ColorEdit3("Color #0", glm::value_ptr(m_lightingUniforms.colors[0])) || changed;
-		// changed = ImGui::DragDirection("Direction #0", m_lightingUniforms.directions[0]) || changed;
-		// changed = ImGui::ColorEdit3("Color #1", glm::value_ptr(m_lightingUniforms.colors[1])) || changed;
-		// changed = ImGui::DragDirection("Direction #1", m_lightingUniforms.directions[1]) || changed;
-		// changed = ImGui::SliderFloat("Hardness", &m_lightingUniforms.hardness, 1.0f, 100.0f) || changed;
-		// changed = ImGui::SliderFloat("K Diffuse", &m_lightingUniforms.kd, 0.0f, 1.0f) || changed;
-		// changed = ImGui::SliderFloat("K Specular", &m_lightingUniforms.ks, 0.0f, 1.0f) || changed;
-		// ImGui::End();
-		// m_lightingUniformsChanged = changed;
-		m_lightingUniformsChanged = false;
+		bool dirty = false;
+		bool lightingChanged = false;
 
-		ImGui::Begin("Axes and Vector Field");
+		ImGui::Begin("Visualization");
+
+		// ── Parametric Surface ──
+		if (ImGui::CollapsingHeader("Parametric Surface", ImGuiTreeNodeFlags_DefaultOpen)) {
+			dirty |= ImGui::Checkbox("Show Surface", &m_showParametricSurface);
+
+			if (m_showParametricSurface) {
+				const char* surfExamples[] = { "sin(x)*cos(y)", "Sphere", "Torus", "Mobius Strip" };
+				int prevSurfExample = m_surfaceExample;
+				dirty |= ImGui::Combo("Surface##ex", &m_surfaceExample, surfExamples, IM_ARRAYSIZE(surfExamples));
+				// Set default ranges when example changes
+				if (m_surfaceExample != prevSurfExample) {
+					switch (m_surfaceExample) {
+					case 0: m_surfaceUMin = -3.0f; m_surfaceUMax = 3.0f; m_surfaceVMin = -3.0f; m_surfaceVMax = 3.0f; break;
+					case 1: m_surfaceUMin = 0.0f; m_surfaceUMax = 6.283f; m_surfaceVMin = 0.0f; m_surfaceVMax = 3.1416f; break;
+					case 2: m_surfaceUMin = 0.0f; m_surfaceUMax = 6.283f; m_surfaceVMin = 0.0f; m_surfaceVMax = 6.283f; break;
+					case 3: m_surfaceUMin = 0.0f; m_surfaceUMax = 6.283f; m_surfaceVMin = -0.5f; m_surfaceVMax = 0.5f; break;
+					}
+				}
+				dirty |= ImGui::SliderInt("Resolution##surf", &m_surfaceResolution, 4, 100);
+				dirty |= ImGui::DragFloatRange2("U Range", &m_surfaceUMin, &m_surfaceUMax, 0.1f, -20.0f, 20.0f);
+				dirty |= ImGui::DragFloatRange2("V Range", &m_surfaceVMin, &m_surfaceVMax, 0.1f, -20.0f, 20.0f);
+			}
+		}
+
+		ImGui::Separator();
+
+		// ── Parametric Curve ──
+		if (ImGui::CollapsingHeader("Parametric Curve", ImGuiTreeNodeFlags_DefaultOpen)) {
+			dirty |= ImGui::Checkbox("Show Curve", &m_showParametricCurve);
+
+			if (m_showParametricCurve) {
+				const char* curveExamples[] = { "Helix", "Trefoil Knot", "Lissajous" };
+				int prevCurveExample = m_curveExample;
+				dirty |= ImGui::Combo("Curve##ex", &m_curveExample, curveExamples, IM_ARRAYSIZE(curveExamples));
+				if (m_curveExample != prevCurveExample) {
+					switch (m_curveExample) {
+					case 0: m_curveTMin = 0.0f; m_curveTMax = 25.13f; break;
+					case 1: m_curveTMin = 0.0f; m_curveTMax = 6.283f; break;
+					case 2: m_curveTMin = 0.0f; m_curveTMax = 6.283f; break;
+					}
+				}
+				dirty |= ImGui::SliderInt("Segments##curve", &m_curveSegments, 10, 500);
+				dirty |= ImGui::DragFloat("T Min", &m_curveTMin, 0.1f);
+				dirty |= ImGui::DragFloat("T Max", &m_curveTMax, 0.1f);
+			}
+		}
+
+		ImGui::Separator();
+
+		// ── Vector Field ──
+		if (ImGui::CollapsingHeader("Vector Field")) {
+			dirty |= ImGui::Checkbox("Show Vector Field", &m_showVectorField);
+
+			if (m_showVectorField) {
+				const char* vfExamples[] = { "Rotation (-y,x,0)", "Spiral (-y,x,sin(z))", "Radial" };
+				dirty |= ImGui::Combo("Field##ex", &m_vfExample, vfExamples, IM_ARRAYSIZE(vfExamples));
+				dirty |= ImGui::SliderInt("Resolution##vf", &m_vfResolution, 2, 10);
+				dirty |= ImGui::SliderFloat("Arrow Scale", &m_vfArrowScale, 0.05f, 2.0f);
+				dirty |= ImGui::DragFloat("Range Min", &m_vfRangeMin, 0.1f, -10.0f, 0.0f);
+				dirty |= ImGui::DragFloat("Range Max", &m_vfRangeMax, 0.1f, 0.0f, 10.0f);
+			}
+		}
+
+		ImGui::Separator();
+
+		// ── Lighting ──
+		if (ImGui::CollapsingHeader("Lighting")) {
+			lightingChanged |= ImGui::ColorEdit3("Color #0", glm::value_ptr(m_lightingUniforms.colors[0]));
+			lightingChanged |= ImGui::DragDirection("Direction #0", m_lightingUniforms.directions[0]);
+			lightingChanged |= ImGui::ColorEdit3("Color #1", glm::value_ptr(m_lightingUniforms.colors[1]));
+			lightingChanged |= ImGui::DragDirection("Direction #1", m_lightingUniforms.directions[1]);
+			lightingChanged |= ImGui::SliderFloat("Hardness", &m_lightingUniforms.hardness, 1.0f, 100.0f);
+			lightingChanged |= ImGui::SliderFloat("K Diffuse", &m_lightingUniforms.kd, 0.0f, 1.0f);
+			lightingChanged |= ImGui::SliderFloat("K Specular", &m_lightingUniforms.ks, 0.0f, 1.0f);
+		}
+
 		ImGui::End();
+
+		m_lightingUniformsChanged = lightingChanged;
+		if (dirty) m_graphObjectsDirty = true;
 	}
 
 	// Draw the UI

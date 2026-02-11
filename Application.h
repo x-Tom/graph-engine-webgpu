@@ -34,6 +34,7 @@
 #include <memory>
 #include <unordered_map>
 #include <string>
+#include <functional>
 
 
 // Forward declare
@@ -93,6 +94,11 @@ private:
 	void terminateGeometry();
 
 	bool initArrowGeometry(float length, float headLength, float headAngle);
+
+	// Graph objects (parametric curves, surfaces, vector fields)
+	bool initGraphObjects();
+	void terminateGraphObjects();
+	void updateGraphObjects();
 
 	// Axes
 	bool initAxesGeometry();
@@ -249,5 +255,38 @@ private:
 	float m_fovy;
 	float m_aspectRatio;
 	float m_nearPlane;
-    float m_farPlane;
+	float m_farPlane;
+
+	// Graph objects buffers
+	WGPUBuffer m_surfaceVertexBuffer = nullptr;
+	int m_surfaceVertexCount = 0;
+	WGPUBuffer m_curveVertexBuffer = nullptr;
+	int m_curveVertexCount = 0;
+	bool m_graphObjectsDirty = true;
+
+	// Visualization toggles
+	bool m_showVectorField = false;
+	bool m_showParametricCurve = true;
+	bool m_showParametricSurface = true;
+
+	// Vector field params
+	int m_vfExample = 0;
+	float m_vfArrowScale = 0.3f;
+	int m_vfResolution = 5;
+	float m_vfRangeMin = -3.0f;
+	float m_vfRangeMax = 3.0f;
+
+	// Curve params
+	int m_curveExample = 0;
+	int m_curveSegments = 200;
+	float m_curveTMin = 0.0f;
+	float m_curveTMax = 25.13f; // ~4 * 2 * pi
+
+	// Surface params
+	int m_surfaceExample = 0;
+	int m_surfaceResolution = 50;
+	float m_surfaceUMin = -3.0f;
+	float m_surfaceUMax = 3.0f;
+	float m_surfaceVMin = -3.0f;
+	float m_surfaceVMax = 3.0f;
 };
