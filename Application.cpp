@@ -1997,7 +1997,7 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 					dirty |= ImGui::Checkbox("Gradient Field", &fd.showGradientField);
 				}
 				if (fd.showTangentVectors || fd.showNormalVectors || fd.showFrenetFrame || fd.showGradientField) {
-					dirty |= ImGui::SliderInt("Overlay Count", &fd.overlayVectorCount, 2, 20);
+					dirty |= ImGui::SliderInt("Overlay Count", &fd.overlayVectorCount, 2, 100);
 					dirty |= ImGui::SliderFloat("Overlay Scale", &fd.overlayVectorScale, 0.05f, 1.5f);
 				}
 
