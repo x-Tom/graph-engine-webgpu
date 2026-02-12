@@ -14,23 +14,18 @@
 #include <imgui.h>
 #include <backends/imgui_impl_wgpu.h>
 #include <backends/imgui_impl_glfw.h>
+#include <misc/cpp/imgui_stdlib.h>
 
 #include <iostream>
 #include <cassert>
 #include <filesystem>
 #include <sstream>
 #include <array>
+#include <cmath>
 
-// using namespace wgpu;
 using VertexAttributes = ResourceManager::VertexAttributes;
 
 constexpr float PI = 3.14159265358979323846f;
-
-// WGPUColor = {R, G, B, A};
-// constexpr WGPUColor BGCOLOR = WGPUColor{ 0.05, 0.05, 0.05, 1.0 };
-// constexpr WGPUColor BGCOLOR = WGPUColor{0.9f, 0.9f, 1.0f, 1.0f};
-// constexpr WGPUColor BGCOLOR = WGPUColor{0.0f, 0.0f, 1.0f, 1.0f}; // 
-constexpr WGPUColor BGCOLOR = WGPUColor{0.6f, 0.6f, 0.7f, 1.0f}; // 
 
 // Custom ImGui widgets
 namespace ImGui {
@@ -61,7 +56,7 @@ bool Application::onInit() {
 	// std::cout << "Passed [1]" << std::endl;
 	if (!initGeometry()) return false;
 	// if (!initAxesGeometry()) return false;
-	if (!initXYPlaneWireframeGeometry(1)) return false;
+	rebuildAxesBuffer();
 	// if (!initPrincipalPlanesWireframeGeometry(1)) return false;
 	// if (!initWireframeGeometry(5)) return false;
 	// std::cout << "Passed [2]" << std::endl;
@@ -82,8 +77,28 @@ bool Application::onInit() {
 	return true;
 }
 
+void Application::deferBufferRelease(WGPUBuffer buffer) {
+	if (buffer) {
+		m_pendingBufferReleases.push_back({buffer, BUFFER_RELEASE_DELAY});
+	}
+}
+
+void Application::processPendingReleases() {
+	for (auto it = m_pendingBufferReleases.begin(); it != m_pendingBufferReleases.end(); ) {
+		it->second--;
+		if (it->second <= 0) {
+			wgpuBufferDestroy(it->first);
+			wgpuBufferRelease(it->first);
+			it = m_pendingBufferReleases.erase(it);
+		} else {
+			++it;
+		}
+	}
+}
+
 void Application::onFrame() {
 	glfwPollEvents();
+	processPendingReleases();
 	updateDragInertia();
 	updateLightingUniforms();
 	updateGraphObjects();
@@ -116,7 +131,7 @@ void Application::onFrame() {
 	renderPassColorAttachment.resolveTarget = nullptr;
 	renderPassColorAttachment.loadOp = WGPULoadOp_Clear;
 	renderPassColorAttachment.storeOp = WGPUStoreOp_Store;
-	renderPassColorAttachment.clearValue = BGCOLOR;
+	renderPassColorAttachment.clearValue = WGPUColor{m_bgColor[0], m_bgColor[1], m_bgColor[2], 1.0};
 	renderPassDesc.colorAttachmentCount = 1;
 	renderPassDesc.colorAttachments = &renderPassColorAttachment;
 
@@ -146,22 +161,21 @@ void Application::onFrame() {
 	
 	if(!renderPass) std::cout << "renderpass command encoder failed" << std::endl;
 
-	m_pipeline = m_pipelines["boat"];
-	wgpuRenderPassEncoderSetPipeline(renderPass, m_pipeline);
-	wgpuRenderPassEncoderSetVertexBuffer(renderPass, 0, m_vertexBuffer, 0, m_vertexCount * sizeof(VertexAttributes));
+	if (m_showBoat) {
+		m_pipeline = m_pipelines["boat"];
+		wgpuRenderPassEncoderSetPipeline(renderPass, m_pipeline);
+		wgpuRenderPassEncoderSetVertexBuffer(renderPass, 0, m_vertexBuffer, 0, m_vertexCount * sizeof(VertexAttributes));
+		wgpuRenderPassEncoderSetBindGroup(renderPass, 0, m_bindGroup, 0, nullptr);
+		wgpuRenderPassEncoderDraw(renderPass, m_vertexCount, 1, 0, 0);
+	}
 
-	// Set binding group
-	wgpuRenderPassEncoderSetBindGroup(renderPass, 0, m_bindGroup, 0, nullptr);
-	wgpuRenderPassEncoderDraw(renderPass, m_vertexCount, 1, 0, 0);
-
-
-	m_pipeline = m_pipelines["axes"];
-	wgpuRenderPassEncoderSetPipeline(renderPass, m_pipeline);
-	wgpuRenderPassEncoderSetVertexBuffer(renderPass, 0, m_axesVertexBuffer, 0, m_axesVertexCount * sizeof(VertexAttributes));
-
-	// Set binding group (if needed for the axes)
-	wgpuRenderPassEncoderSetBindGroup(renderPass, 0, m_bindGroup, 0, nullptr);
-	wgpuRenderPassEncoderDraw(renderPass, m_axesVertexCount, 1, 0, 0);
+	if (m_showAxes && m_axesVertexCount > 0 && m_axesVertexBuffer) {
+		m_pipeline = m_pipelines["axes"];
+		wgpuRenderPassEncoderSetPipeline(renderPass, m_pipeline);
+		wgpuRenderPassEncoderSetVertexBuffer(renderPass, 0, m_axesVertexBuffer, 0, m_axesVertexCount * sizeof(VertexAttributes));
+		wgpuRenderPassEncoderSetBindGroup(renderPass, 0, m_bindGroup, 0, nullptr);
+		wgpuRenderPassEncoderDraw(renderPass, m_axesVertexCount, 1, 0, 0);
+	}
 
 	// Draw surfaces + arrows (TriangleList, "surface" pipeline)
 	if (m_surfaceVertexCount > 0 && m_surfaceVertexBuffer) {
@@ -171,13 +185,7 @@ void Application::onFrame() {
 		wgpuRenderPassEncoderDraw(renderPass, m_surfaceVertexCount, 1, 0, 0);
 	}
 
-	// Draw curves (LineList, reuse "axes" pipeline)
-	if (m_curveVertexCount > 0 && m_curveVertexBuffer) {
-		wgpuRenderPassEncoderSetPipeline(renderPass, m_pipelines["axes"]);
-		wgpuRenderPassEncoderSetVertexBuffer(renderPass, 0, m_curveVertexBuffer, 0, m_curveVertexCount * sizeof(VertexAttributes));
-		wgpuRenderPassEncoderSetBindGroup(renderPass, 0, m_bindGroup, 0, nullptr);
-		wgpuRenderPassEncoderDraw(renderPass, m_curveVertexCount, 1, 0, 0);
-	}
+	// Curves now rendered as tube meshes via surface pipeline (included in surfaceVertexBuffer)
 
 	// We add the GUI drawing commands to the render pass
 	updateGui(renderPass);
@@ -314,7 +322,7 @@ void Application::onMouseButton(int button, int action, int /* modifiers */) {
 
 void Application::onScroll(double /* xoffset */, double yoffset) {
 	m_cameraState.zoom += m_drag.scrollSensitivity * static_cast<float>(yoffset);
-	m_cameraState.zoom = glm::clamp(m_cameraState.zoom, -2.0f, 2.0f);
+	m_cameraState.zoom = glm::clamp(m_cameraState.zoom, -5.0f, 2.0f);
 	updateViewMatrix();
 }
 
@@ -1382,9 +1390,110 @@ void Application::updateDragInertia() {
 	}
 }
 
+// ─── Axes Rebuild ───────────────────────────────────────────────────────────
+
+void Application::rebuildAxesBuffer() {
+	// Defer old buffer destruction
+	if (m_axesVertexBuffer) {
+		deferBufferRelease(m_axesVertexBuffer);
+		m_axesVertexBuffer = nullptr;
+		m_axesVertexCount = 0;
+	}
+
+	std::vector<VertexAttributes> axesVertexData;
+	float len = m_gridExtent;
+
+	// Principal axes
+	axesVertexData.push_back({{-len, 0, 0}, {0,0,0}, {m_axisColors[0][0], m_axisColors[0][1], m_axisColors[0][2]}, {0,0}});
+	axesVertexData.push_back({{ len, 0, 0}, {0,0,0}, {m_axisColors[0][0], m_axisColors[0][1], m_axisColors[0][2]}, {0,0}});
+	axesVertexData.push_back({{0, -len, 0}, {0,0,0}, {m_axisColors[1][0], m_axisColors[1][1], m_axisColors[1][2]}, {0,0}});
+	axesVertexData.push_back({{0,  len, 0}, {0,0,0}, {m_axisColors[1][0], m_axisColors[1][1], m_axisColors[1][2]}, {0,0}});
+	axesVertexData.push_back({{0, 0, -len}, {0,0,0}, {m_axisColors[2][0], m_axisColors[2][1], m_axisColors[2][2]}, {0,0}});
+	axesVertexData.push_back({{0, 0,  len}, {0,0,0}, {m_axisColors[2][0], m_axisColors[2][1], m_axisColors[2][2]}, {0,0}});
+
+	if (m_showGrid) {
+		vec3 gc = {m_gridColor[0], m_gridColor[1], m_gridColor[2]};
+		for (float i = -len; i <= len; i += m_gridSpacing) {
+			if (m_showXYGrid) {
+				axesVertexData.push_back({{-len, i, 0}, {0,0,0}, gc, {0,0}});
+				axesVertexData.push_back({{ len, i, 0}, {0,0,0}, gc, {0,0}});
+				axesVertexData.push_back({{i, -len, 0}, {0,0,0}, gc, {0,0}});
+				axesVertexData.push_back({{i,  len, 0}, {0,0,0}, gc, {0,0}});
+			}
+			if (m_showXZGrid) {
+				axesVertexData.push_back({{-len, 0, i}, {0,0,0}, gc, {0,0}});
+				axesVertexData.push_back({{ len, 0, i}, {0,0,0}, gc, {0,0}});
+				axesVertexData.push_back({{i, 0, -len}, {0,0,0}, gc, {0,0}});
+				axesVertexData.push_back({{i, 0,  len}, {0,0,0}, gc, {0,0}});
+			}
+			if (m_showYZGrid) {
+				axesVertexData.push_back({{0, -len, i}, {0,0,0}, gc, {0,0}});
+				axesVertexData.push_back({{0,  len, i}, {0,0,0}, gc, {0,0}});
+				axesVertexData.push_back({{0, i, -len}, {0,0,0}, gc, {0,0}});
+				axesVertexData.push_back({{0, i,  len}, {0,0,0}, gc, {0,0}});
+			}
+		}
+	}
+
+	if (!axesVertexData.empty()) {
+		WGPUBufferDescriptor bufferDesc = {};
+		bufferDesc.size = axesVertexData.size() * sizeof(VertexAttributes);
+		bufferDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_Vertex;
+		bufferDesc.mappedAtCreation = false;
+		m_axesVertexBuffer = wgpuDeviceCreateBuffer(m_device, &bufferDesc);
+		wgpuQueueWriteBuffer(m_queue, m_axesVertexBuffer, 0, axesVertexData.data(), bufferDesc.size);
+		m_axesVertexCount = static_cast<int>(axesVertexData.size());
+	}
+
+	m_axesDirty = false;
+}
+
+// ─── Expression Compilation ─────────────────────────────────────────────────
+
+void Application::compileFunctionDef(FunctionDefinition& fd) {
+	// Build variable name list based on inputDim
+	std::vector<std::string> varNames;
+	for (int i = 0; i < fd.inputDim; ++i) {
+		if (!fd.paramNames[i].empty())
+			varNames.push_back(fd.paramNames[i]);
+	}
+
+	// Add "pi" and "e" as extra variables bound to constants
+	// (tinyexpr has built-in pi and e, so we don't need to add them)
+
+	fd.isValid = true;
+	fd.errorMsg.clear();
+
+	for (int i = 0; i < fd.outputDim; ++i) {
+		std::string err;
+		if (!fd.parsers[i].compile(fd.exprStrings[i], varNames, err)) {
+			fd.isValid = false;
+			fd.errorMsg = "f" + std::to_string(i + 1) + ": " + err;
+			return;
+		}
+	}
+}
+
 // ─── Graph Objects ──────────────────────────────────────────────────────────
 
 bool Application::initGraphObjects() {
+	// Create a default helix function
+	FunctionDefinition helix;
+	helix.name = "r";
+	helix.inputDim = 1;
+	helix.outputDim = 3;
+	helix.paramNames[0] = "t";
+	helix.exprStrings[0] = "cos(t)";
+	helix.exprStrings[1] = "sin(t)";
+	helix.exprStrings[2] = "t/(2*pi)";
+	helix.rangeMin[0] = 0.0f;
+	helix.rangeMax[0] = 25.13f;
+	helix.resolution[0] = 200;
+	helix.tubeRadius = 0.03f;
+	helix.color[0] = 1.0f; helix.color[1] = 1.0f; helix.color[2] = 0.0f;
+	compileFunctionDef(helix);
+	m_functions.push_back(std::move(helix));
+
 	updateGraphObjects();
 	return true;
 }
@@ -1402,99 +1511,125 @@ void Application::terminateGraphObjects() {
 		m_curveVertexBuffer = nullptr;
 		m_curveVertexCount = 0;
 	}
+	// Flush all pending buffer releases
+	for (auto& p : m_pendingBufferReleases) {
+		wgpuBufferDestroy(p.first);
+		wgpuBufferRelease(p.first);
+	}
+	m_pendingBufferReleases.clear();
 }
 
 void Application::updateGraphObjects() {
+	if (m_axesDirty) {
+		rebuildAxesBuffer();
+	}
+
 	if (!m_graphObjectsDirty) return;
 	m_graphObjectsDirty = false;
 
-	// Destroy old buffers
+	// Defer old buffer destruction (GPU may still be using them)
 	if (m_surfaceVertexBuffer) {
-		wgpuBufferDestroy(m_surfaceVertexBuffer);
-		wgpuBufferRelease(m_surfaceVertexBuffer);
+		deferBufferRelease(m_surfaceVertexBuffer);
 		m_surfaceVertexBuffer = nullptr;
 		m_surfaceVertexCount = 0;
 	}
 	if (m_curveVertexBuffer) {
-		wgpuBufferDestroy(m_curveVertexBuffer);
-		wgpuBufferRelease(m_curveVertexBuffer);
+		deferBufferRelease(m_curveVertexBuffer);
 		m_curveVertexBuffer = nullptr;
 		m_curveVertexCount = 0;
 	}
 
-	// ── Collect surface vertices (surfaces + arrows) ──
+	// All geometry goes into surfaceVerts (TriangleList, "surface" pipeline)
 	std::vector<VertexAttributes> surfaceVerts;
 
-	if (m_showParametricSurface) {
-		std::function<vec3(float, float)> surfFunc;
-		switch (m_surfaceExample) {
-		case 0: // z = sin(x)*cos(y)
-			surfFunc = [](float u, float v) -> vec3 {
-				return vec3(u, v, sinf(u) * cosf(v));
+	for (auto& fd : m_functions) {
+		if (!fd.show || !fd.isValid) continue;
+
+		vec3 col(fd.color[0], fd.color[1], fd.color[2]);
+		int n = fd.inputDim;
+		int m = fd.outputDim;
+
+		if (n == 1) {
+			// Curve: build lambda t -> vec3
+			auto curveFunc = [&fd, m](float t) -> glm::vec3 {
+				double vals[1] = { (double)t };
+				if (m == 1) {
+					float fx = (float)fd.parsers[0].evaluate(vals);
+					return glm::vec3(t, fx, 0.0f);
+				} else if (m == 2) {
+					float fx = (float)fd.parsers[0].evaluate(vals);
+					float fy = (float)fd.parsers[1].evaluate(vals);
+					return glm::vec3(fx, fy, 0.0f);
+				} else { // m == 3
+					float fx = (float)fd.parsers[0].evaluate(vals);
+					float fy = (float)fd.parsers[1].evaluate(vals);
+					float fz = (float)fd.parsers[2].evaluate(vals);
+					return glm::vec3(fx, fy, fz);
+				}
 			};
-			break;
-		case 1: // Sphere
-			surfFunc = [](float u, float v) -> vec3 {
-				return vec3(2.0f * cosf(u) * sinf(v), 2.0f * sinf(u) * sinf(v), 2.0f * cosf(v));
+
+			auto verts = GraphObjects::generateParametricCurveTube(
+				curveFunc, fd.rangeMin[0], fd.rangeMax[0],
+				fd.resolution[0], fd.tubeRadius, 8, col);
+			surfaceVerts.insert(surfaceVerts.end(), verts.begin(), verts.end());
+
+		} else if (n == 2) {
+			// Surface: build lambda (u,v) -> vec3
+			auto surfFunc = [&fd, m](float u, float v) -> glm::vec3 {
+				double vals[2] = { (double)u, (double)v };
+				if (m == 1) {
+					float fval = (float)fd.parsers[0].evaluate(vals);
+					return glm::vec3(u, v, fval);
+				} else if (m == 2) {
+					float fx = (float)fd.parsers[0].evaluate(vals);
+					float fy = (float)fd.parsers[1].evaluate(vals);
+					return glm::vec3(fx, fy, 0.0f);
+				} else { // m == 3
+					float fx = (float)fd.parsers[0].evaluate(vals);
+					float fy = (float)fd.parsers[1].evaluate(vals);
+					float fz = (float)fd.parsers[2].evaluate(vals);
+					return glm::vec3(fx, fy, fz);
+				}
 			};
-			break;
-		case 2: // Torus
-			surfFunc = [](float u, float v) -> vec3 {
-				float R = 2.0f, r = 0.7f;
-				return vec3((R + r * cosf(v)) * cosf(u), (R + r * cosf(v)) * sinf(u), r * sinf(v));
-			};
-			break;
-		case 3: // Mobius strip
-			surfFunc = [](float u, float v) -> vec3 {
-				float half_v = v * 0.5f;
-				return vec3(
-					(1.0f + half_v * cosf(u * 0.5f)) * cosf(u),
-					(1.0f + half_v * cosf(u * 0.5f)) * sinf(u),
-					half_v * sinf(u * 0.5f)
-				);
-			};
-			break;
-		default:
-			surfFunc = [](float u, float v) -> vec3 {
-				return vec3(u, v, sinf(u) * cosf(v));
-			};
-			break;
+
+			auto verts = GraphObjects::generateParametricSurface(
+				surfFunc,
+				fd.rangeMin[0], fd.rangeMax[0],
+				fd.rangeMin[1], fd.rangeMax[1],
+				fd.resolution[0], fd.resolution[1], true);
+			surfaceVerts.insert(surfaceVerts.end(), verts.begin(), verts.end());
+
+		} else if (n == 3) {
+			vec3 rMin(fd.rangeMin[0], fd.rangeMin[1], fd.rangeMin[2]);
+			vec3 rMax(fd.rangeMax[0], fd.rangeMax[1], fd.rangeMax[2]);
+			glm::ivec3 res(fd.vfResolution);
+
+			if (m == 1) {
+				// Scalar field: colored cubes
+				auto scalarFunc = [&fd](glm::vec3 p) -> float {
+					double vals[3] = { (double)p.x, (double)p.y, (double)p.z };
+					return (float)fd.parsers[0].evaluate(vals);
+				};
+
+				auto verts = GraphObjects::generateScalarField(
+					scalarFunc, rMin, rMax, res, 0.1f);
+				surfaceVerts.insert(surfaceVerts.end(), verts.begin(), verts.end());
+
+			} else {
+				// Vector field (m==2 or m==3)
+				auto fieldFunc = [&fd, m](glm::vec3 p) -> glm::vec3 {
+					double vals[3] = { (double)p.x, (double)p.y, (double)p.z };
+					float fx = (float)fd.parsers[0].evaluate(vals);
+					float fy = (float)fd.parsers[1].evaluate(vals);
+					float fz = (m >= 3) ? (float)fd.parsers[2].evaluate(vals) : 0.0f;
+					return glm::vec3(fx, fy, fz);
+				};
+
+				auto verts = GraphObjects::generateVectorField(
+					fieldFunc, rMin, rMax, res, fd.arrowScale);
+				surfaceVerts.insert(surfaceVerts.end(), verts.begin(), verts.end());
+			}
 		}
-
-		auto verts = GraphObjects::generateParametricSurface(
-			surfFunc,
-			m_surfaceUMin, m_surfaceUMax, m_surfaceVMin, m_surfaceVMax,
-			m_surfaceResolution, m_surfaceResolution, true);
-		surfaceVerts.insert(surfaceVerts.end(), verts.begin(), verts.end());
-	}
-
-	if (m_showVectorField) {
-		std::function<vec3(vec3)> fieldFunc;
-		switch (m_vfExample) {
-		case 0: // Rotation
-			fieldFunc = [](vec3 p) -> vec3 { return vec3(-p.y, p.x, 0); };
-			break;
-		case 1: // Spiral
-			fieldFunc = [](vec3 p) -> vec3 { return vec3(-p.y, p.x, sinf(p.z)); };
-			break;
-		case 2: // Source/Radial
-			fieldFunc = [](vec3 p) -> vec3 {
-				float len = glm::length(p);
-				if (len < 0.01f) return vec3(0);
-				return p / len;
-			};
-			break;
-		default:
-			fieldFunc = [](vec3 p) -> vec3 { return vec3(-p.y, p.x, 0); };
-			break;
-		}
-
-		glm::ivec3 res(m_vfResolution);
-		auto verts = GraphObjects::generateVectorField(
-			fieldFunc,
-			vec3(m_vfRangeMin), vec3(m_vfRangeMax), res,
-			m_vfArrowScale);
-		surfaceVerts.insert(surfaceVerts.end(), verts.begin(), verts.end());
 	}
 
 	// Upload surface buffer
@@ -1506,58 +1641,6 @@ void Application::updateGraphObjects() {
 		m_surfaceVertexBuffer = wgpuDeviceCreateBuffer(m_device, &bufferDesc);
 		wgpuQueueWriteBuffer(m_queue, m_surfaceVertexBuffer, 0, surfaceVerts.data(), bufferDesc.size);
 		m_surfaceVertexCount = static_cast<int>(surfaceVerts.size());
-	}
-
-	// ── Collect curve vertices ──
-	std::vector<VertexAttributes> curveVerts;
-
-	if (m_showParametricCurve) {
-		std::function<vec3(float)> curveFunc;
-		vec3 curveColor(1.0f, 1.0f, 0.0f);
-		switch (m_curveExample) {
-		case 0: // Helix
-			curveFunc = [](float t) -> vec3 {
-				return vec3(cosf(t), sinf(t), t / (2.0f * 3.14159f));
-			};
-			curveColor = vec3(1.0f, 1.0f, 0.0f);
-			break;
-		case 1: // Trefoil knot
-			curveFunc = [](float t) -> vec3 {
-				return vec3(
-					sinf(t) + 2.0f * sinf(2.0f * t),
-					cosf(t) - 2.0f * cosf(2.0f * t),
-					-sinf(3.0f * t)
-				);
-			};
-			curveColor = vec3(1.0f, 0.3f, 0.8f);
-			break;
-		case 2: // Lissajous
-			curveFunc = [](float t) -> vec3 {
-				return vec3(2.0f * sinf(2.0f * t), 2.0f * sinf(3.0f * t), 2.0f * cosf(5.0f * t));
-			};
-			curveColor = vec3(0.3f, 1.0f, 0.5f);
-			break;
-		default:
-			curveFunc = [](float t) -> vec3 {
-				return vec3(cosf(t), sinf(t), t / (2.0f * 3.14159f));
-			};
-			break;
-		}
-
-		auto verts = GraphObjects::generateParametricCurve(
-			curveFunc, m_curveTMin, m_curveTMax, m_curveSegments, curveColor);
-		curveVerts.insert(curveVerts.end(), verts.begin(), verts.end());
-	}
-
-	// Upload curve buffer
-	if (!curveVerts.empty()) {
-		WGPUBufferDescriptor bufferDesc = {};
-		bufferDesc.size = curveVerts.size() * sizeof(VertexAttributes);
-		bufferDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_Vertex;
-		bufferDesc.mappedAtCreation = false;
-		m_curveVertexBuffer = wgpuDeviceCreateBuffer(m_device, &bufferDesc);
-		wgpuQueueWriteBuffer(m_queue, m_curveVertexBuffer, 0, curveVerts.data(), bufferDesc.size);
-		m_curveVertexCount = static_cast<int>(curveVerts.size());
 	}
 }
 
@@ -1590,67 +1673,302 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 		bool lightingChanged = false;
 
 		ImGui::Begin("Visualization");
+		ImGui::PushItemWidth(150);
 
-		// ── Parametric Surface ──
-		if (ImGui::CollapsingHeader("Parametric Surface", ImGuiTreeNodeFlags_DefaultOpen)) {
-			dirty |= ImGui::Checkbox("Show Surface", &m_showParametricSurface);
+		// ── Functions ──
+		int removeIdx = -1;
+		for (int fi = 0; fi < (int)m_functions.size(); ++fi) {
+			auto& fd = m_functions[fi];
+			ImGui::PushID(fi);
 
-			if (m_showParametricSurface) {
-				const char* surfExamples[] = { "sin(x)*cos(y)", "Sphere", "Torus", "Mobius Strip" };
-				int prevSurfExample = m_surfaceExample;
-				dirty |= ImGui::Combo("Surface##ex", &m_surfaceExample, surfExamples, IM_ARRAYSIZE(surfExamples));
-				// Set default ranges when example changes
-				if (m_surfaceExample != prevSurfExample) {
-					switch (m_surfaceExample) {
-					case 0: m_surfaceUMin = -3.0f; m_surfaceUMax = 3.0f; m_surfaceVMin = -3.0f; m_surfaceVMax = 3.0f; break;
-					case 1: m_surfaceUMin = 0.0f; m_surfaceUMax = 6.283f; m_surfaceVMin = 0.0f; m_surfaceVMax = 3.1416f; break;
-					case 2: m_surfaceUMin = 0.0f; m_surfaceUMax = 6.283f; m_surfaceVMin = 0.0f; m_surfaceVMax = 6.283f; break;
-					case 3: m_surfaceUMin = 0.0f; m_surfaceUMax = 6.283f; m_surfaceVMin = -0.5f; m_surfaceVMax = 0.5f; break;
+			// Build header label: "r(t)" or "S(u,v)" etc.
+			std::string params;
+			for (int i = 0; i < fd.inputDim; ++i) {
+				if (i > 0) params += ",";
+				params += fd.paramNames[i];
+			}
+			std::string headerLabel = fd.name + "(" + params + ")###func" + std::to_string(fi);
+
+			if (ImGui::CollapsingHeader(headerLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+				dirty |= ImGui::Checkbox("Show", &fd.show);
+				ImGui::SameLine();
+
+				// Input dim selector
+				int prevInputDim = fd.inputDim;
+				ImGui::SetNextItemWidth(80);
+				const char* inputDimLabels[] = {"1", "2", "3"};
+				int inputDimIdx = fd.inputDim - 1;
+				if (ImGui::Combo("In##dim", &inputDimIdx, inputDimLabels, 3)) {
+					fd.inputDim = inputDimIdx + 1;
+					dirty = true;
+				}
+				ImGui::SameLine();
+
+				// Output dim selector
+				ImGui::SetNextItemWidth(80);
+				int outputDimIdx = fd.outputDim - 1;
+				if (ImGui::Combo("Out##dim", &outputDimIdx, inputDimLabels, 3)) {
+					fd.outputDim = outputDimIdx + 1;
+					dirty = true;
+				}
+
+				// Reset param names when inputDim changes
+				if (fd.inputDim != prevInputDim) {
+					if (fd.inputDim == 1) { fd.paramNames[0] = "t"; fd.paramNames[1] = ""; fd.paramNames[2] = ""; }
+					else if (fd.inputDim == 2) { fd.paramNames[0] = "u"; fd.paramNames[1] = "v"; fd.paramNames[2] = ""; }
+					else { fd.paramNames[0] = "x"; fd.paramNames[1] = "y"; fd.paramNames[2] = "z"; }
+					// Clear extra expressions
+					for (int i = 0; i < 3; ++i) fd.exprStrings[i] = "";
+				}
+
+				// Name + param names
+				ImGui::SetNextItemWidth(60);
+				dirty |= ImGui::InputText("Name", &fd.name);
+				ImGui::SameLine();
+				for (int i = 0; i < fd.inputDim; ++i) {
+					ImGui::SameLine();
+					ImGui::SetNextItemWidth(40);
+					std::string paramLabel = "##param" + std::to_string(i);
+					dirty |= ImGui::InputText(paramLabel.c_str(), &fd.paramNames[i]);
+				}
+
+				// Expression text fields
+				for (int i = 0; i < fd.outputDim; ++i) {
+					std::string label = "f" + std::to_string(i + 1) + "##expr" + std::to_string(i);
+					dirty |= ImGui::InputText(label.c_str(), &fd.exprStrings[i]);
+				}
+
+				// Error message
+				if (!fd.isValid && !fd.errorMsg.empty()) {
+					ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.2f, 0.2f, 1));
+					ImGui::TextWrapped("%s", fd.errorMsg.c_str());
+					ImGui::PopStyleColor();
+				}
+
+				// Presets
+				{
+					int n = fd.inputDim, m = fd.outputDim;
+					std::vector<std::pair<std::string, std::vector<std::string>>> presets;
+					std::vector<std::array<float, 6>> presetRanges; // min0,max0,min1,max1,min2,max2
+
+					if (n == 1 && m == 3) {
+						presets = {
+							{"Helix", {"cos(t)", "sin(t)", "t/(2*pi)"}},
+							{"Trefoil", {"sin(t)+2*sin(2*t)", "cos(t)-2*cos(2*t)", "-sin(3*t)"}},
+							{"Lissajous", {"2*sin(2*t)", "2*sin(3*t)", "2*cos(5*t)"}},
+						};
+						presetRanges = {
+							{0, 25.13f, 0, 0, 0, 0},
+							{0, 6.283f, 0, 0, 0, 0},
+							{0, 6.283f, 0, 0, 0, 0},
+						};
+					} else if (n == 1 && m == 1) {
+						presets = {
+							{"sin(t)", {"sin(t)"}},
+							{"t^2", {"t^2"}},
+							{"exp(-t^2)", {"exp(-t^2)"}},
+						};
+						presetRanges = {
+							{-6.283f, 6.283f, 0, 0, 0, 0},
+							{-5, 5, 0, 0, 0, 0},
+							{-5, 5, 0, 0, 0, 0},
+						};
+					} else if (n == 1 && m == 2) {
+						presets = {
+							{"Circle", {"cos(t)", "sin(t)"}},
+							{"Lemniscate", {"cos(t)/(1+sin(t)^2)", "sin(t)*cos(t)/(1+sin(t)^2)"}},
+						};
+						presetRanges = {
+							{0, 6.283f, 0, 0, 0, 0},
+							{0, 6.283f, 0, 0, 0, 0},
+						};
+					} else if (n == 2 && m == 3) {
+						presets = {
+							{"Sphere", {"2*cos(u)*sin(v)", "2*sin(u)*sin(v)", "2*cos(v)"}},
+							{"Torus", {"(2+0.7*cos(v))*cos(u)", "(2+0.7*cos(v))*sin(u)", "0.7*sin(v)"}},
+							{"Mobius", {"(1+v/2*cos(u/2))*cos(u)", "(1+v/2*cos(u/2))*sin(u)", "v/2*sin(u/2)"}},
+						};
+						presetRanges = {
+							{0, 6.283f, 0, 3.1416f, 0, 0},
+							{0, 6.283f, 0, 6.283f, 0, 0},
+							{0, 6.283f, -0.5f, 0.5f, 0, 0},
+						};
+					} else if (n == 2 && m == 1) {
+						presets = {
+							{"sin(u)*cos(v)", {"sin(u)*cos(v)"}},
+							{"Ripple", {"sin(sqrt(u^2+v^2))"}},
+							{"Saddle", {"u^2-v^2"}},
+						};
+						presetRanges = {
+							{-5, 5, -5, 5, 0, 0},
+							{-5, 5, -5, 5, 0, 0},
+							{-5, 5, -5, 5, 0, 0},
+						};
+					} else if (n == 2 && m == 2) {
+						presets = {
+							{"Identity", {"u", "v"}},
+							{"Swirl", {"u*cos(v)-v*sin(u)", "u*sin(v)+v*cos(u)"}},
+						};
+						presetRanges = {
+							{-5, 5, -5, 5, 0, 0},
+							{-5, 5, -5, 5, 0, 0},
+						};
+					} else if (n == 3 && m == 3) {
+						presets = {
+							{"Rotation", {"-y", "x", "0"}},
+							{"Spiral", {"-y", "x", "sin(z)"}},
+							{"Radial", {"x/sqrt(x^2+y^2+z^2+0.01)", "y/sqrt(x^2+y^2+z^2+0.01)", "z/sqrt(x^2+y^2+z^2+0.01)"}},
+						};
+						presetRanges = {
+							{-5, 5, -5, 5, -5, 5},
+							{-5, 5, -5, 5, -5, 5},
+							{-5, 5, -5, 5, -5, 5},
+						};
+					} else if (n == 3 && m == 2) {
+						presets = {
+							{"Rotation 2D", {"-y", "x"}},
+						};
+						presetRanges = {
+							{-5, 5, -5, 5, -5, 5},
+						};
+					} else if (n == 3 && m == 1) {
+						presets = {
+							{"Distance", {"sqrt(x^2+y^2+z^2)"}},
+							{"Sine Field", {"sin(x)*cos(y)*sin(z)"}},
+						};
+						presetRanges = {
+							{-5, 5, -5, 5, -5, 5},
+							{-5, 5, -5, 5, -5, 5},
+						};
+					}
+
+					if (!presets.empty()) {
+						std::vector<const char*> presetNames;
+						presetNames.push_back("(Custom)");
+						for (auto& p : presets) presetNames.push_back(p.first.c_str());
+
+						int presetIdx = 0;
+						if (ImGui::Combo("Preset##preset", &presetIdx, presetNames.data(), (int)presetNames.size())) {
+							if (presetIdx > 0) {
+								auto& p = presets[presetIdx - 1];
+								for (int i = 0; i < (int)p.second.size() && i < 3; ++i) {
+									fd.exprStrings[i] = p.second[i];
+								}
+								auto& r = presetRanges[presetIdx - 1];
+								fd.rangeMin[0] = r[0]; fd.rangeMax[0] = r[1];
+								if (fd.inputDim >= 2) { fd.rangeMin[1] = r[2]; fd.rangeMax[1] = r[3]; }
+								if (fd.inputDim >= 3) { fd.rangeMin[2] = r[4]; fd.rangeMax[2] = r[5]; }
+								dirty = true;
+							}
+						}
 					}
 				}
-				dirty |= ImGui::SliderInt("Resolution##surf", &m_surfaceResolution, 4, 100);
-				dirty |= ImGui::DragFloatRange2("U Range", &m_surfaceUMin, &m_surfaceUMax, 0.1f, -20.0f, 20.0f);
-				dirty |= ImGui::DragFloatRange2("V Range", &m_surfaceVMin, &m_surfaceVMax, 0.1f, -20.0f, 20.0f);
+
+				// Range controls
+				if (fd.inputDim == 1) {
+					dirty |= ImGui::DragFloat("t min", &fd.rangeMin[0], 0.1f);
+					ImGui::SameLine();
+					dirty |= ImGui::DragFloat("t max", &fd.rangeMax[0], 0.1f);
+					dirty |= ImGui::SliderInt("Segments", &fd.resolution[0], 10, 500);
+					dirty |= ImGui::SliderFloat("Tube Radius", &fd.tubeRadius, 0.005f, 0.2f);
+				} else if (fd.inputDim == 2) {
+					dirty |= ImGui::DragFloatRange2("U Range", &fd.rangeMin[0], &fd.rangeMax[0], 0.1f, -20.0f, 20.0f);
+					dirty |= ImGui::DragFloatRange2("V Range", &fd.rangeMin[1], &fd.rangeMax[1], 0.1f, -20.0f, 20.0f);
+					dirty |= ImGui::SliderInt("U Res", &fd.resolution[0], 4, 100);
+					dirty |= ImGui::SliderInt("V Res", &fd.resolution[1], 4, 100);
+				} else if (fd.inputDim == 3) {
+					dirty |= ImGui::DragFloat("X Min", &fd.rangeMin[0], 0.1f, -20.0f, 0.0f);
+					ImGui::SameLine();
+					dirty |= ImGui::DragFloat("X Max", &fd.rangeMax[0], 0.1f, 0.0f, 20.0f);
+					dirty |= ImGui::DragFloat("Y Min", &fd.rangeMin[1], 0.1f, -20.0f, 0.0f);
+					ImGui::SameLine();
+					dirty |= ImGui::DragFloat("Y Max", &fd.rangeMax[1], 0.1f, 0.0f, 20.0f);
+					dirty |= ImGui::DragFloat("Z Min", &fd.rangeMin[2], 0.1f, -20.0f, 0.0f);
+					ImGui::SameLine();
+					dirty |= ImGui::DragFloat("Z Max", &fd.rangeMax[2], 0.1f, 0.0f, 20.0f);
+					dirty |= ImGui::SliderInt("Resolution##vf", &fd.vfResolution, 2, 10);
+					if (fd.outputDim >= 2) {
+						dirty |= ImGui::SliderFloat("Arrow Scale", &fd.arrowScale, 0.05f, 2.0f);
+					}
+				}
+
+				dirty |= ImGui::ColorEdit3("Color", fd.color);
+
+				if (ImGui::Button("Remove")) {
+					removeIdx = fi;
+				}
 			}
+
+			ImGui::PopID();
+			ImGui::Separator();
+		}
+
+		// Remove function if requested
+		if (removeIdx >= 0 && removeIdx < (int)m_functions.size()) {
+			m_functions.erase(m_functions.begin() + removeIdx);
+			dirty = true;
+		}
+
+		// Add function button
+		if (ImGui::Button("+ Add Function")) {
+			FunctionDefinition newFd;
+			newFd.name = "f";
+			newFd.inputDim = 1;
+			newFd.outputDim = 3;
+			newFd.paramNames[0] = "t";
+			newFd.exprStrings[0] = "cos(t)";
+			newFd.exprStrings[1] = "sin(t)";
+			newFd.exprStrings[2] = "0";
+			newFd.rangeMin[0] = 0;
+			newFd.rangeMax[0] = 6.283f;
+			newFd.resolution[0] = 200;
+			compileFunctionDef(newFd);
+			m_functions.push_back(std::move(newFd));
+			dirty = true;
+		}
+
+		ImGui::PopItemWidth();
+		ImGui::End(); // Visualization
+
+		// Recompile all expressions when dirty
+		if (dirty) {
+			for (auto& fd : m_functions) {
+				compileFunctionDef(fd);
+			}
+			m_graphObjectsDirty = true;
+		}
+
+		// ── Settings window ──
+		ImGui::Begin("Settings");
+		ImGui::PushItemWidth(150);
+
+		// ── Axes & Grid ──
+		if (ImGui::CollapsingHeader("Axes & Grid", ImGuiTreeNodeFlags_DefaultOpen)) {
+			bool axesDirty = false;
+			axesDirty |= ImGui::Checkbox("Show Axes", &m_showAxes);
+			axesDirty |= ImGui::Checkbox("Show Grid", &m_showGrid);
+			if (m_showGrid) {
+				axesDirty |= ImGui::Checkbox("XY Plane", &m_showXYGrid);
+				ImGui::SameLine();
+				axesDirty |= ImGui::Checkbox("XZ Plane", &m_showXZGrid);
+				ImGui::SameLine();
+				axesDirty |= ImGui::Checkbox("YZ Plane", &m_showYZGrid);
+				axesDirty |= ImGui::SliderFloat("Grid Spacing", &m_gridSpacing, 0.25f, 5.0f);
+				axesDirty |= ImGui::SliderFloat("Grid Extent", &m_gridExtent, 1.0f, 50.0f);
+				axesDirty |= ImGui::ColorEdit3("Grid Color", m_gridColor);
+			}
+			axesDirty |= ImGui::ColorEdit3("X Axis", m_axisColors[0]);
+			axesDirty |= ImGui::ColorEdit3("Y Axis", m_axisColors[1]);
+			axesDirty |= ImGui::ColorEdit3("Z Axis", m_axisColors[2]);
+			ImGui::ColorEdit3("Background", m_bgColor);
+			if (axesDirty) m_axesDirty = true;
 		}
 
 		ImGui::Separator();
 
-		// ── Parametric Curve ──
-		if (ImGui::CollapsingHeader("Parametric Curve", ImGuiTreeNodeFlags_DefaultOpen)) {
-			dirty |= ImGui::Checkbox("Show Curve", &m_showParametricCurve);
-
-			if (m_showParametricCurve) {
-				const char* curveExamples[] = { "Helix", "Trefoil Knot", "Lissajous" };
-				int prevCurveExample = m_curveExample;
-				dirty |= ImGui::Combo("Curve##ex", &m_curveExample, curveExamples, IM_ARRAYSIZE(curveExamples));
-				if (m_curveExample != prevCurveExample) {
-					switch (m_curveExample) {
-					case 0: m_curveTMin = 0.0f; m_curveTMax = 25.13f; break;
-					case 1: m_curveTMin = 0.0f; m_curveTMax = 6.283f; break;
-					case 2: m_curveTMin = 0.0f; m_curveTMax = 6.283f; break;
-					}
-				}
-				dirty |= ImGui::SliderInt("Segments##curve", &m_curveSegments, 10, 500);
-				dirty |= ImGui::DragFloat("T Min", &m_curveTMin, 0.1f);
-				dirty |= ImGui::DragFloat("T Max", &m_curveTMax, 0.1f);
-			}
-		}
-
-		ImGui::Separator();
-
-		// ── Vector Field ──
-		if (ImGui::CollapsingHeader("Vector Field")) {
-			dirty |= ImGui::Checkbox("Show Vector Field", &m_showVectorField);
-
-			if (m_showVectorField) {
-				const char* vfExamples[] = { "Rotation (-y,x,0)", "Spiral (-y,x,sin(z))", "Radial" };
-				dirty |= ImGui::Combo("Field##ex", &m_vfExample, vfExamples, IM_ARRAYSIZE(vfExamples));
-				dirty |= ImGui::SliderInt("Resolution##vf", &m_vfResolution, 2, 10);
-				dirty |= ImGui::SliderFloat("Arrow Scale", &m_vfArrowScale, 0.05f, 2.0f);
-				dirty |= ImGui::DragFloat("Range Min", &m_vfRangeMin, 0.1f, -10.0f, 0.0f);
-				dirty |= ImGui::DragFloat("Range Max", &m_vfRangeMax, 0.1f, 0.0f, 10.0f);
-			}
+		// ── Display ──
+		if (ImGui::CollapsingHeader("Display")) {
+			ImGui::Checkbox("Show Boat", &m_showBoat);
 		}
 
 		ImGui::Separator();
@@ -1666,10 +1984,74 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 			lightingChanged |= ImGui::SliderFloat("K Specular", &m_lightingUniforms.ks, 0.0f, 1.0f);
 		}
 
-		ImGui::End();
+		ImGui::PopItemWidth();
+		ImGui::End(); // Settings
 
 		m_lightingUniformsChanged = lightingChanged;
-		if (dirty) m_graphObjectsDirty = true;
+
+		// ── Function label overlay (top-right) ──
+		{
+			ImGuiIO& io = ImGui::GetIO();
+			float padding = 10.0f;
+			float yOffset = padding;
+
+			for (int fi = 0; fi < (int)m_functions.size(); ++fi) {
+				auto& fd = m_functions[fi];
+				if (!fd.show || !fd.isValid) continue;
+
+				// Build params string: "t" or "u,v" or "x,y,z"
+				std::string params;
+				for (int i = 0; i < fd.inputDim; ++i) {
+					if (i > 0) params += ",";
+					params += fd.paramNames[i];
+				}
+
+				// Build type label with R^n -> R^m mapping
+				std::string typeLabel;
+				if (fd.inputDim == 1) typeLabel = "Curve";
+				else if (fd.inputDim == 2) typeLabel = "Surface";
+				else if (fd.inputDim == 3 && fd.outputDim == 1) typeLabel = "Scalar Field";
+				else typeLabel = "Vector Field";
+				typeLabel += "  " + fd.name + ":R" + (fd.inputDim > 1 ? "^" + std::to_string(fd.inputDim) : "")
+					+ " -> R" + (fd.outputDim > 1 ? "^" + std::to_string(fd.outputDim) : "");
+
+				// Build expression string: "r(t) = (cos(t), sin(t), t/(2*pi))"
+				std::string exprText = fd.name + "(" + params + ") = ";
+				if (fd.outputDim == 1) {
+					exprText += fd.exprStrings[0];
+				} else {
+					exprText += "(";
+					for (int i = 0; i < fd.outputDim; ++i) {
+						if (i > 0) exprText += ", ";
+						exprText += fd.exprStrings[i];
+					}
+					exprText += ")";
+				}
+
+				std::string label = typeLabel + ":  " + exprText;
+
+				// Measure text size to position from top-right
+				ImVec2 textSize = ImGui::CalcTextSize(label.c_str());
+				float windowWidth = textSize.x + padding * 2;
+
+				ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - windowWidth - padding, yOffset), ImGuiCond_Always);
+				ImGui::SetNextWindowSize(ImVec2(0, 0));
+				ImGui::SetNextWindowBgAlpha(0.5f);
+
+				std::string overlayId = "##overlay" + std::to_string(fi);
+				ImGui::Begin(overlayId.c_str(), nullptr,
+					ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+					ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+					ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+
+				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(fd.color[0], fd.color[1], fd.color[2], 1.0f));
+				ImGui::TextUnformatted(label.c_str());
+				ImGui::PopStyleColor();
+
+				yOffset += ImGui::GetWindowHeight() + 4.0f;
+				ImGui::End();
+			}
+		}
 	}
 
 	// Draw the UI
