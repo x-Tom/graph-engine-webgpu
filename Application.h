@@ -56,9 +56,9 @@ struct FunctionDefinition {
 	std::string errorMsg;
 	bool show = true;
 	float color[3] = {1.0f, 1.0f, 0.0f};
-	float rangeMin[3] = {0.0f, -5.0f, -5.0f};
-	float rangeMax[3] = {25.13f, 5.0f, 5.0f};
-	int resolution[2] = {200, 50};       // [segments/uRes, vRes]
+	float rangeMin[3] = {-5.0f, -5.0f, -5.0f};
+	float rangeMax[3] = {5.0f, 5.0f, 5.0f};
+	int resolution[2] = {200, 200};      // [segments/uRes, vRes]
 	float tubeRadius = 0.03f;
 	float arrowScale = 0.3f;
 	int vfResolution = 5;
@@ -67,6 +67,7 @@ struct FunctionDefinition {
 	bool wireframe = false;           // surfaces only (n=2): render as wireframe
 	bool showTangentVectors = false;  // curves only (n=1): velocity arrows
 	bool showNormalVectors = false;   // surfaces only (n=2): normal arrows
+	bool flipNormalVectors = false;   // surfaces only (n=2): flip normal direction
 	bool showFrenetFrame = false;     // curves only (n=1): T/N/B trihedron
 	float frenetT = 0.5f;            // parameter value for Frenet frame (normalized 0-1)
 	bool showGradientField = false;   // scalar fields (m=1): gradient arrows
