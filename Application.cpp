@@ -185,7 +185,13 @@ void Application::onFrame() {
 		wgpuRenderPassEncoderDraw(renderPass, m_surfaceVertexCount, 1, 0, 0);
 	}
 
-	// Curves now rendered as tube meshes via surface pipeline (included in surfaceVertexBuffer)
+	// Wireframe overlay lines (LineList, "axes" pipeline)
+	if (m_curveVertexCount > 0 && m_curveVertexBuffer) {
+		wgpuRenderPassEncoderSetPipeline(renderPass, m_pipelines["axes"]);
+		wgpuRenderPassEncoderSetVertexBuffer(renderPass, 0, m_curveVertexBuffer, 0, m_curveVertexCount * sizeof(VertexAttributes));
+		wgpuRenderPassEncoderSetBindGroup(renderPass, 0, m_bindGroup, 0, nullptr);
+		wgpuRenderPassEncoderDraw(renderPass, m_curveVertexCount, 1, 0, 0);
+	}
 
 	// We add the GUI drawing commands to the render pass
 	updateGui(renderPass);
@@ -1539,8 +1545,10 @@ void Application::updateGraphObjects() {
 		m_curveVertexCount = 0;
 	}
 
-	// All geometry goes into surfaceVerts (TriangleList, "surface" pipeline)
+	// TriangleList geometry (lit, "surface" pipeline)
 	std::vector<VertexAttributes> surfaceVerts;
+	// LineList geometry (unlit, "axes" pipeline) — for wireframe overlays
+	std::vector<VertexAttributes> lineVerts;
 
 	for (auto& fd : m_functions) {
 		if (!fd.show || !fd.isValid) continue;
@@ -1573,6 +1581,22 @@ void Application::updateGraphObjects() {
 				fd.resolution[0], fd.tubeRadius, 8, col);
 			surfaceVerts.insert(surfaceVerts.end(), verts.begin(), verts.end());
 
+			// Tangent vectors overlay
+			if (fd.showTangentVectors) {
+				auto tangentVerts = GraphObjects::generateTangentVectors(
+					curveFunc, fd.rangeMin[0], fd.rangeMax[0],
+					fd.overlayVectorCount, fd.overlayVectorScale, vec3(1, 0, 0));
+				surfaceVerts.insert(surfaceVerts.end(), tangentVerts.begin(), tangentVerts.end());
+			}
+
+			// Frenet frame overlay
+			if (fd.showFrenetFrame) {
+				auto frenetVerts = GraphObjects::generateFrenetFrame(
+					curveFunc, fd.rangeMin[0], fd.rangeMax[0],
+					fd.frenetT, fd.overlayVectorScale);
+				surfaceVerts.insert(surfaceVerts.end(), frenetVerts.begin(), frenetVerts.end());
+			}
+
 		} else if (n == 2) {
 			// Surface: build lambda (u,v) -> vec3
 			auto surfFunc = [&fd, m](float u, float v) -> glm::vec3 {
@@ -1592,12 +1616,51 @@ void Application::updateGraphObjects() {
 				}
 			};
 
-			auto verts = GraphObjects::generateParametricSurface(
-				surfFunc,
-				fd.rangeMin[0], fd.rangeMax[0],
-				fd.rangeMin[1], fd.rangeMax[1],
-				fd.resolution[0], fd.resolution[1], true);
-			surfaceVerts.insert(surfaceVerts.end(), verts.begin(), verts.end());
+			if (fd.wireframe) {
+				// Wireframe: LineList via axes pipeline
+				auto wfVerts = GraphObjects::generateParametricSurfaceWireframe(
+					surfFunc,
+					fd.rangeMin[0], fd.rangeMax[0],
+					fd.rangeMin[1], fd.rangeMax[1],
+					fd.resolution[0], fd.resolution[1], col);
+				lineVerts.insert(lineVerts.end(), wfVerts.begin(), wfVerts.end());
+			} else {
+				// Filled surface
+				auto verts = GraphObjects::generateParametricSurface(
+					surfFunc,
+					fd.rangeMin[0], fd.rangeMax[0],
+					fd.rangeMin[1], fd.rangeMax[1],
+					fd.resolution[0], fd.resolution[1], true);
+				surfaceVerts.insert(surfaceVerts.end(), verts.begin(), verts.end());
+			}
+
+			// Normal vectors overlay
+			if (fd.showNormalVectors) {
+				int nCount = std::max(fd.overlayVectorCount, 2);
+				auto normalVerts = GraphObjects::generateSurfaceNormals(
+					surfFunc,
+					fd.rangeMin[0], fd.rangeMax[0],
+					fd.rangeMin[1], fd.rangeMax[1],
+					nCount, nCount,
+					fd.overlayVectorScale, vec3(0.2f, 0.4f, 1.0f));
+				surfaceVerts.insert(surfaceVerts.end(), normalVerts.begin(), normalVerts.end());
+			}
+
+			// Gradient field overlay (only for R^2->R^1)
+			if (fd.showGradientField && m == 1) {
+				auto scalarFunc2D = [&fd](float u, float v) -> float {
+					double vals[2] = { (double)u, (double)v };
+					return (float)fd.parsers[0].evaluate(vals);
+				};
+				int gCount = std::max(fd.overlayVectorCount, 2);
+				auto gradVerts = GraphObjects::generateGradientField2D(
+					scalarFunc2D,
+					fd.rangeMin[0], fd.rangeMax[0],
+					fd.rangeMin[1], fd.rangeMax[1],
+					gCount, gCount,
+					fd.overlayVectorScale);
+				surfaceVerts.insert(surfaceVerts.end(), gradVerts.begin(), gradVerts.end());
+			}
 
 		} else if (n == 3) {
 			vec3 rMin(fd.rangeMin[0], fd.rangeMin[1], fd.rangeMin[2]);
@@ -1614,6 +1677,13 @@ void Application::updateGraphObjects() {
 				auto verts = GraphObjects::generateScalarField(
 					scalarFunc, rMin, rMax, res, 0.1f);
 				surfaceVerts.insert(surfaceVerts.end(), verts.begin(), verts.end());
+
+				// Gradient field overlay for R^3->R^1
+				if (fd.showGradientField) {
+					auto gradVerts = GraphObjects::generateGradientField3D(
+						scalarFunc, rMin, rMax, res, fd.overlayVectorScale);
+					surfaceVerts.insert(surfaceVerts.end(), gradVerts.begin(), gradVerts.end());
+				}
 
 			} else {
 				// Vector field (m==2 or m==3)
@@ -1632,7 +1702,7 @@ void Application::updateGraphObjects() {
 		}
 	}
 
-	// Upload surface buffer
+	// Upload surface buffer (TriangleList)
 	if (!surfaceVerts.empty()) {
 		WGPUBufferDescriptor bufferDesc = {};
 		bufferDesc.size = surfaceVerts.size() * sizeof(VertexAttributes);
@@ -1641,6 +1711,17 @@ void Application::updateGraphObjects() {
 		m_surfaceVertexBuffer = wgpuDeviceCreateBuffer(m_device, &bufferDesc);
 		wgpuQueueWriteBuffer(m_queue, m_surfaceVertexBuffer, 0, surfaceVerts.data(), bufferDesc.size);
 		m_surfaceVertexCount = static_cast<int>(surfaceVerts.size());
+	}
+
+	// Upload wireframe line buffer (LineList)
+	if (!lineVerts.empty()) {
+		WGPUBufferDescriptor bufferDesc = {};
+		bufferDesc.size = lineVerts.size() * sizeof(VertexAttributes);
+		bufferDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_Vertex;
+		bufferDesc.mappedAtCreation = false;
+		m_curveVertexBuffer = wgpuDeviceCreateBuffer(m_device, &bufferDesc);
+		wgpuQueueWriteBuffer(m_queue, m_curveVertexBuffer, 0, lineVerts.data(), bufferDesc.size);
+		m_curveVertexCount = static_cast<int>(lineVerts.size());
 	}
 }
 
@@ -1893,6 +1974,32 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 				}
 
 				dirty |= ImGui::ColorEdit3("Color", fd.color);
+
+				// ── Overlay options ──
+				ImGui::Separator();
+				ImGui::Text("Overlays:");
+				if (fd.inputDim == 1) {
+					// Curve overlays
+					dirty |= ImGui::Checkbox("Tangent Vectors", &fd.showTangentVectors);
+					dirty |= ImGui::Checkbox("Frenet Frame (TNB)", &fd.showFrenetFrame);
+					if (fd.showFrenetFrame) {
+						dirty |= ImGui::SliderFloat("Frame Position", &fd.frenetT, 0.0f, 1.0f);
+					}
+				} else if (fd.inputDim == 2) {
+					// Surface overlays
+					dirty |= ImGui::Checkbox("Wireframe", &fd.wireframe);
+					dirty |= ImGui::Checkbox("Normal Vectors", &fd.showNormalVectors);
+					if (fd.outputDim == 1) {
+						dirty |= ImGui::Checkbox("Gradient Field", &fd.showGradientField);
+					}
+				} else if (fd.inputDim == 3 && fd.outputDim == 1) {
+					// Scalar field overlays
+					dirty |= ImGui::Checkbox("Gradient Field", &fd.showGradientField);
+				}
+				if (fd.showTangentVectors || fd.showNormalVectors || fd.showFrenetFrame || fd.showGradientField) {
+					dirty |= ImGui::SliderInt("Overlay Count", &fd.overlayVectorCount, 2, 20);
+					dirty |= ImGui::SliderFloat("Overlay Scale", &fd.overlayVectorScale, 0.05f, 1.5f);
+				}
 
 				if (ImGui::Button("Remove")) {
 					removeIdx = fi;

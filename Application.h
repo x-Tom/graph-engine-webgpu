@@ -62,6 +62,16 @@ struct FunctionDefinition {
 	float tubeRadius = 0.03f;
 	float arrowScale = 0.3f;
 	int vfResolution = 5;
+
+	// Overlay options
+	bool wireframe = false;           // surfaces only (n=2): render as wireframe
+	bool showTangentVectors = false;  // curves only (n=1): velocity arrows
+	bool showNormalVectors = false;   // surfaces only (n=2): normal arrows
+	bool showFrenetFrame = false;     // curves only (n=1): T/N/B trihedron
+	float frenetT = 0.5f;            // parameter value for Frenet frame (normalized 0-1)
+	bool showGradientField = false;   // scalar fields (m=1): gradient arrows
+	int overlayVectorCount = 10;      // how many tangent/normal arrows to show
+	float overlayVectorScale = 0.3f;  // scale of overlay arrows
 };
 
 class Application {
