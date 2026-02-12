@@ -25,6 +25,10 @@ add_executable(App
 	Application.cpp
 	GraphObjects.h
 	GraphObjects.cpp
+	ExpressionParser.h
+	ExpressionParser.cpp
+	tinyexpr/tinyexpr.h
+	tinyexpr/tinyexpr.c
 	ResourceManager.h
 	ResourceManager.cpp
 	implementations.cpp
@@ -56,6 +60,9 @@ set_target_properties(App PROPERTIES
 )
 target_treat_all_warnings_as_errors(App)
 target_copy_webgpu_binaries(App)
+
+# Disable warnings-as-errors for tinyexpr (third-party C code)
+set_source_files_properties(tinyexpr/tinyexpr.c PROPERTIES COMPILE_FLAGS "-Wno-error -w")
 
 if (MSVC)
 	# Ignore a warning that GLM requires to bypass

@@ -29,6 +29,13 @@ public:
 		float tMin, float tMax, int segments,
 		vec3 color = vec3(1, 1, 0));
 
+	// Generate a parametric curve as a tube mesh (TriangleList) for lit rendering
+	static std::vector<VertexAttributes> generateParametricCurveTube(
+		std::function<vec3(float)> curveFunc,
+		float tMin, float tMax, int segments,
+		float tubeRadius = 0.03f, int tubeSegments = 8,
+		vec3 color = vec3(1, 1, 0));
+
 	// Generate a parametric surface r(u,v)
 	// Returns TriangleList vertices with normals for Blinn-Phong
 	static std::vector<VertexAttributes> generateParametricSurface(
@@ -37,9 +44,20 @@ public:
 		int uSegments, int vSegments,
 		bool colorByHeight = true);
 
-private:
-	// Map a value in [0,1] to a blue->green->red gradient
+	// Generate a scalar field visualization: small colored cubes at grid points
+	static std::vector<VertexAttributes> generateScalarField(
+		std::function<float(vec3)> scalarFunc,
+		vec3 rangeMin, vec3 rangeMax, ivec3 resolution,
+		float cubeSize = 0.1f);
+
+	// Generate a small colored cube centered at origin (12 triangles = 36 verts)
+	static std::vector<VertexAttributes> generateColoredCube(
+		float halfSize, vec3 color);
+
+	// Map a value in [0,1] to a blue->green->red gradient (public for scalar field)
 	static vec3 magnitudeToColor(float t);
+
+private:
 	// Map height to color based on min/max range
 	static vec3 heightToColor(float height, float minH, float maxH);
 };

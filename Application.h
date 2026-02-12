@@ -1,20 +1,20 @@
 /**
  * This file is part of the "Learn WebGPU for C++" book.
  *   https://github.com/eliemichel/LearnWebGPU
- * 
+ *
  * MIT License
  * Copyright (c) 2022-2023 Elie Michel
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in all
  * copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -31,14 +31,38 @@
 
 #include <array>
 #include "webgpu-utils.h"
+#include "ExpressionParser.h"
 #include <memory>
 #include <unordered_map>
 #include <string>
 #include <functional>
+#include <deque>
+#include <vector>
+#include <utility>
 
 
 // Forward declare
 struct GLFWwindow;
+
+// Generalized R^n -> R^m function definition
+struct FunctionDefinition {
+	std::string name = "r";
+	int inputDim = 1;                    // n: 1, 2, or 3
+	int outputDim = 3;                   // m: 1, 2, or 3
+	std::string paramNames[3] = {"t","",""};
+	std::string exprStrings[3] = {"cos(t)","sin(t)","t/(2*pi)"};
+	ExpressionParser parsers[3];
+	bool isValid = false;
+	std::string errorMsg;
+	bool show = true;
+	float color[3] = {1.0f, 1.0f, 0.0f};
+	float rangeMin[3] = {0.0f, -5.0f, -5.0f};
+	float rangeMax[3] = {25.13f, 5.0f, 5.0f};
+	int resolution[2] = {200, 50};       // [segments/uRes, vRes]
+	float tubeRadius = 0.03f;
+	float arrowScale = 0.3f;
+	int vfResolution = 5;
+};
 
 class Application {
 public:
@@ -79,7 +103,6 @@ private:
 	void terminateDepthBuffer();
 
 	// Init Boat Render Pipeline
-	// bool initRenderPipeline();
 	bool initRenderPipeline(const std::string& pipelineName, const std::string& shaderFileName, WGPUPrimitiveTopology topology);
 	void terminateRenderPipeline(const std::string& pipelineName);
 	void terminateRenderPipelines();
@@ -100,12 +123,16 @@ private:
 	void terminateGraphObjects();
 	void updateGraphObjects();
 
+	// Compile all expressions in a FunctionDefinition
+	void compileFunctionDef(FunctionDefinition& fd);
+
 	// Axes
 	bool initAxesGeometry();
 	bool initXYPlaneWireframeGeometry(float spacing, float len = 1000);
 	bool initPrincipalPlanesWireframeGeometry(float spacing, float len = 1000);
 	bool initWireframeGeometry(float spacing, float len = 500);
 	void terminateAxesGeometry();
+	void rebuildAxesBuffer();
 
 	bool initUniforms(float fovy = glm::radians(45.0f), float aspectRatio = 640.0f / 480.0f, float nearPlane = 0.01f, float farPlane = 100.0f);
 	void terminateUniforms();
@@ -210,9 +237,6 @@ private:
 	WGPUTexture m_depthTexture = nullptr;
 	WGPUTextureView m_depthTextureView = nullptr;
 
-	// std::unordered_map<const std::string&, WGPUShaderModule> m_shaderModuleMap;
-	// std::unordered_map<const std::string&, WGPURenderPipeline> m_pipelines;
-
 	std::unordered_map<std::string, WGPUShaderModule> m_shaderModuleMap;
 	std::unordered_map<std::string, WGPURenderPipeline> m_pipelines;
 
@@ -225,7 +249,7 @@ private:
 	WGPUSampler m_sampler = nullptr;
 	WGPUTexture m_texture = nullptr;
 	WGPUTextureView m_textureView = nullptr;
-	
+
 	// Geometry
 	WGPUBuffer m_vertexBuffer = nullptr;
 	int m_vertexCount = 0;
@@ -264,29 +288,28 @@ private:
 	int m_curveVertexCount = 0;
 	bool m_graphObjectsDirty = true;
 
-	// Visualization toggles
-	bool m_showVectorField = false;
-	bool m_showParametricCurve = true;
-	bool m_showParametricSurface = true;
+	// Deferred buffer destruction (wait N frames before destroying)
+	static constexpr int BUFFER_RELEASE_DELAY = 3;
+	std::vector<std::pair<WGPUBuffer, int>> m_pendingBufferReleases;
+	void deferBufferRelease(WGPUBuffer buffer);
+	void processPendingReleases();
 
-	// Vector field params
-	int m_vfExample = 0;
-	float m_vfArrowScale = 0.3f;
-	int m_vfResolution = 5;
-	float m_vfRangeMin = -3.0f;
-	float m_vfRangeMax = 3.0f;
+	// Boat visibility
+	bool m_showBoat = false;
 
-	// Curve params
-	int m_curveExample = 0;
-	int m_curveSegments = 200;
-	float m_curveTMin = 0.0f;
-	float m_curveTMax = 25.13f; // ~4 * 2 * pi
+	// Function definitions (generalized R^n -> R^m)
+	std::deque<FunctionDefinition> m_functions;
 
-	// Surface params
-	int m_surfaceExample = 0;
-	int m_surfaceResolution = 50;
-	float m_surfaceUMin = -3.0f;
-	float m_surfaceUMax = 3.0f;
-	float m_surfaceVMin = -3.0f;
-	float m_surfaceVMax = 3.0f;
+	// Axes cosmetic options
+	bool m_showAxes = true;
+	bool m_showGrid = true;
+	float m_gridSpacing = 1.0f;
+	float m_gridExtent = 20.0f;
+	bool m_showXYGrid = true;
+	bool m_showXZGrid = false;
+	bool m_showYZGrid = false;
+	float m_gridColor[3] = {1.0f, 1.0f, 1.0f};
+	float m_axisColors[3][3] = {{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}};
+	float m_bgColor[3] = {0.6f, 0.6f, 0.7f};
+	bool m_axesDirty = false;
 };
