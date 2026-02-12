@@ -1532,6 +1532,12 @@ void Application::updateGraphObjects() {
 	}
 
 	if (!m_graphObjectsDirty) return;
+
+	// Throttle updates to prevent buffer churn (wait at least 2 frames)
+	m_framesSinceLastUpdate++;
+	if (m_framesSinceLastUpdate < 2) return;
+	m_framesSinceLastUpdate = 0;
+
 	m_graphObjectsDirty = false;
 
 	// Defer old buffer destruction (GPU may still be using them)
@@ -1568,7 +1574,10 @@ void Application::updateGraphObjects() {
 				} else if (m == 2) {
 					float fx = (float)fd.parsers[0].evaluate(vals);
 					float fy = (float)fd.parsers[1].evaluate(vals);
-					return glm::vec3(fx, fy, 0.0f);
+					// Map to selected plane: 0=xy, 1=xz, 2=yz
+					if (fd.curvePlane == 0) return glm::vec3(fx, fy, 0.0f);      // xy plane
+					else if (fd.curvePlane == 1) return glm::vec3(fx, 0.0f, fy); // xz plane
+					else return glm::vec3(0.0f, fx, fy);                          // yz plane
 				} else { // m == 3
 					float fx = (float)fd.parsers[0].evaluate(vals);
 					float fy = (float)fd.parsers[1].evaluate(vals);
@@ -1577,10 +1586,20 @@ void Application::updateGraphObjects() {
 				}
 			};
 
-			auto verts = GraphObjects::generateParametricCurveTube(
-				curveFunc, fd.rangeMin[0], fd.rangeMax[0],
-				fd.resolution[0], fd.tubeRadius, 8, col);
-			surfaceVerts.insert(surfaceVerts.end(), verts.begin(), verts.end());
+			// Use thinner tube for 2D curves, and support wireframe mode
+			float tubeRad = (m == 2) ? 0.01f : fd.tubeRadius;
+			if (!fd.wireframe) {
+				auto verts = GraphObjects::generateParametricCurveTube(
+					curveFunc, fd.rangeMin[0], fd.rangeMax[0],
+					fd.resolution[0], tubeRad, 8, col);
+				surfaceVerts.insert(surfaceVerts.end(), verts.begin(), verts.end());
+			} else {
+				// Wireframe: use line rendering
+				auto curveLineVerts = GraphObjects::generateParametricCurve(
+					curveFunc, fd.rangeMin[0], fd.rangeMax[0],
+					fd.resolution[0], col);
+				lineVerts.insert(lineVerts.end(), curveLineVerts.begin(), curveLineVerts.end());
+			}
 
 			// Tangent vectors overlay
 			if (fd.showTangentVectors) {
@@ -1588,6 +1607,14 @@ void Application::updateGraphObjects() {
 					curveFunc, fd.rangeMin[0], fd.rangeMax[0],
 					fd.overlayVectorCount, fd.overlayVectorScale, vec3(1, 0, 0));
 				surfaceVerts.insert(surfaceVerts.end(), tangentVerts.begin(), tangentVerts.end());
+			}
+
+			// Normal vectors overlay for curves
+			if (fd.showNormalVectors) {
+				auto normalVerts = GraphObjects::generateCurveNormals(
+					curveFunc, fd.rangeMin[0], fd.rangeMax[0],
+					fd.overlayVectorCount, fd.overlayVectorScale, vec3(0, 1, 0), fd.flipNormalVectors);
+				surfaceVerts.insert(surfaceVerts.end(), normalVerts.begin(), normalVerts.end());
 			}
 
 			// Frenet frame overlay
@@ -1647,6 +1674,18 @@ void Application::updateGraphObjects() {
 				surfaceVerts.insert(surfaceVerts.end(), normalVerts.begin(), normalVerts.end());
 			}
 
+			// Tangent vectors overlay for surfaces
+			if (fd.showTangentVectors) {
+				int tCount = std::max(fd.overlayVectorCount, 2);
+				auto tangentVerts = GraphObjects::generateSurfaceTangents(
+					surfFunc,
+					fd.rangeMin[0], fd.rangeMax[0],
+					fd.rangeMin[1], fd.rangeMax[1],
+					tCount, tCount,
+					fd.overlayVectorScale, vec3(1.0f, 0.2f, 0.2f), fd.surfaceTangentMode);
+				surfaceVerts.insert(surfaceVerts.end(), tangentVerts.begin(), tangentVerts.end());
+			}
+
 			// Gradient field overlay (only for R^2->R^1)
 			if (fd.showGradientField && m == 1) {
 				auto scalarFunc2D = [&fd](float u, float v) -> float {
@@ -1696,9 +1735,19 @@ void Application::updateGraphObjects() {
 					return glm::vec3(fx, fy, fz);
 				};
 
-				auto verts = GraphObjects::generateVectorField(
-					fieldFunc, rMin, rMax, res, fd.arrowScale);
-				surfaceVerts.insert(surfaceVerts.end(), verts.begin(), verts.end());
+				// Show vector field arrows
+				if (fd.showVectorField) {
+					auto verts = GraphObjects::generateVectorField(
+						fieldFunc, rMin, rMax, res, fd.arrowScale);
+					surfaceVerts.insert(surfaceVerts.end(), verts.begin(), verts.end());
+				}
+
+				// Show streamlines
+				if (fd.showStreamlines) {
+					auto streamVerts = GraphObjects::generateStreamlines(
+						fieldFunc, rMin, rMax, res, fd.overlayVectorCount, fd.overlayVectorScale);
+					lineVerts.insert(lineVerts.end(), streamVerts.begin(), streamVerts.end());
+				}
 			}
 		}
 	}
@@ -1846,9 +1895,9 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 							{"Lissajous", {"2*sin(2*t)", "2*sin(3*t)", "2*cos(5*t)"}},
 						};
 						presetRanges = {
-							{-5, 5, 0, 0, 0, 0},
-							{-5, 5, 0, 0, 0, 0},
-							{-5, 5, 0, 0, 0, 0},
+							{0, 6.283f, 0, 0, 0, 0},      // 0 to 2π
+							{0, 6.283f, 0, 0, 0, 0},      // 0 to 2π
+							{0, 6.283f, 0, 0, 0, 0},      // 0 to 2π
 						};
 					} else if (n == 1 && m == 1) {
 						presets = {
@@ -1867,8 +1916,8 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 							{"Lemniscate", {"cos(t)/(1+sin(t)^2)", "sin(t)*cos(t)/(1+sin(t)^2)"}},
 						};
 						presetRanges = {
-							{-5, 5, 0, 0, 0, 0},
-							{-5, 5, 0, 0, 0, 0},
+							{0, 6.283f, 0, 0, 0, 0},      // 0 to 2π
+							{0, 6.283f, 0, 0, 0, 0},      // 0 to 2π
 						};
 					} else if (n == 2 && m == 3) {
 						presets = {
@@ -1877,9 +1926,9 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 							{"Mobius", {"(1+v/2*cos(u/2))*cos(u)", "(1+v/2*cos(u/2))*sin(u)", "v/2*sin(u/2)"}},
 						};
 						presetRanges = {
-							{-5, 5, -5, 5, 0, 0},
-							{-5, 5, -5, 5, 0, 0},
-							{-5, 5, -5, 5, 0, 0},
+							{0, 6.283f, 0, 3.1416f, 0, 0},   // Sphere: u=0 to 2π, v=0 to π
+							{0, 6.283f, 0, 6.283f, 0, 0},    // Torus: u=0 to 2π, v=0 to 2π
+							{0, 6.283f, -0.5f, 0.5f, 0, 0},  // Mobius: u=0 to 2π, v=-0.5 to 0.5
 						};
 					} else if (n == 2 && m == 1) {
 						presets = {
@@ -1888,9 +1937,9 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 							{"Saddle", {"u^2-v^2"}},
 						};
 						presetRanges = {
-							{-5, 5, -5, 5, 0, 0},
-							{-5, 5, -5, 5, 0, 0},
-							{-5, 5, -5, 5, 0, 0},
+							{0, 6.283f, 0, 6.283f, 0, 0},    // sin: u,v = 0 to 2π
+							{-5, 5, -5, 5, 0, 0},             // Ripple: keep -5 to 5
+							{-5, 5, -5, 5, 0, 0},             // Saddle: keep -5 to 5
 						};
 					} else if (n == 2 && m == 2) {
 						presets = {
@@ -1957,7 +2006,15 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 					ImGui::Text("t min"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##tmin", &fd.rangeMin[0], 0.1f);
 					ImGui::Text("t max"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##tmax", &fd.rangeMax[0], 0.1f);
 					ImGui::Text("Segments"); ImGui::SameLine(); dirty |= ImGui::DragInt("##segments", &fd.resolution[0], 1.0f, 10, 500);
-					ImGui::Text("Tube Radius"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##tuberadius", &fd.tubeRadius, 0.001f, 0.005f, 0.2f);
+					if (fd.outputDim != 2) {
+						ImGui::Text("Tube Radius"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##tuberadius", &fd.tubeRadius, 0.001f, 0.005f, 0.2f);
+					}
+					// For 2D curves, add plane selection
+					if (fd.outputDim == 2) {
+						ImGui::Text("Plane"); ImGui::SameLine();
+						const char* planes[] = {"xy", "xz", "yz"};
+						dirty |= ImGui::Combo("##plane", &fd.curvePlane, planes, 3);
+					}
 				} else if (fd.inputDim == 2) {
 					ImGui::Text("U Range"); ImGui::SameLine(); dirty |= ImGui::DragFloatRange2("##urange", &fd.rangeMin[0], &fd.rangeMax[0], 0.1f, -20.0f, 20.0f);
 					ImGui::Text("V Range"); ImGui::SameLine(); dirty |= ImGui::DragFloatRange2("##vrange", &fd.rangeMin[1], &fd.rangeMax[1], 0.1f, -20.0f, 20.0f);
@@ -1983,7 +2040,14 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 				ImGui::Text("Overlays:");
 				if (fd.inputDim == 1) {
 					// Curve overlays
-					dirty |= ImGui::Checkbox("Tangent Vectors", &fd.showTangentVectors);
+					dirty |= ImGui::Checkbox("Wireframe", &fd.wireframe);
+					dirty |= ImGui::Checkbox("Tangent Vector(s)", &fd.showTangentVectors);
+					dirty |= ImGui::Checkbox("Normal Vector", &fd.showNormalVectors);
+					if (fd.showNormalVectors) {
+						ImGui::Indent();
+						dirty |= ImGui::Checkbox("Flip Normal Direction", &fd.flipNormalVectors);
+						ImGui::Unindent();
+					}
 					dirty |= ImGui::Checkbox("Frenet Frame (TNB)", &fd.showFrenetFrame);
 					if (fd.showFrenetFrame) {
 						ImGui::Text("Frame Position"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##frenetpos", &fd.frenetT, 0.01f, 0.0f, 1.0f);
@@ -1991,20 +2055,33 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 				} else if (fd.inputDim == 2) {
 					// Surface overlays
 					dirty |= ImGui::Checkbox("Wireframe", &fd.wireframe);
-					dirty |= ImGui::Checkbox("Normal Vectors", &fd.showNormalVectors);
+					dirty |= ImGui::Checkbox("Normal Vector", &fd.showNormalVectors);
 					if (fd.showNormalVectors) {
 						ImGui::Indent();
 						dirty |= ImGui::Checkbox("Flip Normal Direction", &fd.flipNormalVectors);
 						ImGui::Unindent();
 					}
+					dirty |= ImGui::Checkbox("Tangent Vector(s)", &fd.showTangentVectors);
+					if (fd.showTangentVectors) {
+						ImGui::Indent();
+						ImGui::Text("Show"); ImGui::SameLine();
+						const char* tangentModes[] = {"Both u & v", "u only", "v only"};
+						dirty |= ImGui::Combo("##tangentmode", &fd.surfaceTangentMode, tangentModes, 3);
+						ImGui::Unindent();
+					}
 					if (fd.outputDim == 1) {
 						dirty |= ImGui::Checkbox("Gradient Field", &fd.showGradientField);
 					}
-				} else if (fd.inputDim == 3 && fd.outputDim == 1) {
-					// Scalar field overlays
-					dirty |= ImGui::Checkbox("Gradient Field", &fd.showGradientField);
+				} else if (fd.inputDim == 3) {
+					// Vector/scalar field overlays
+					if (fd.outputDim == 1) {
+						dirty |= ImGui::Checkbox("Gradient Field", &fd.showGradientField);
+					} else {
+						dirty |= ImGui::Checkbox("Vector Field", &fd.showVectorField);
+						dirty |= ImGui::Checkbox("Streamlines", &fd.showStreamlines);
+					}
 				}
-				if (fd.showTangentVectors || fd.showNormalVectors || fd.showFrenetFrame || fd.showGradientField) {
+				if (fd.showTangentVectors || fd.showNormalVectors || fd.showFrenetFrame || fd.showGradientField || fd.showVectorField || fd.showStreamlines) {
 					ImGui::Text("Overlay Count"); ImGui::SameLine(); dirty |= ImGui::DragInt("##overlaycount", &fd.overlayVectorCount, 0.5f, 2, 100);
 					ImGui::Text("Overlay Scale"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##overlayscale", &fd.overlayVectorScale, 0.01f, 0.05f, 1.5f);
 				}
