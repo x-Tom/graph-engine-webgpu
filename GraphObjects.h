@@ -54,6 +54,45 @@ public:
 	static std::vector<VertexAttributes> generateColoredCube(
 		float halfSize, vec3 color);
 
+	// Generate a parametric surface as wireframe (LineList)
+	static std::vector<VertexAttributes> generateParametricSurfaceWireframe(
+		std::function<vec3(float, float)> surfaceFunc,
+		float uMin, float uMax, float vMin, float vMax,
+		int uSegments, int vSegments,
+		vec3 color = vec3(1, 1, 1));
+
+	// Generate tangent vector arrows along a parametric curve
+	static std::vector<VertexAttributes> generateTangentVectors(
+		std::function<vec3(float)> curveFunc,
+		float tMin, float tMax, int count,
+		float arrowScale = 0.3f, vec3 color = vec3(1, 0, 0));
+
+	// Generate normal vector arrows on a parametric surface
+	static std::vector<VertexAttributes> generateSurfaceNormals(
+		std::function<vec3(float, float)> surfaceFunc,
+		float uMin, float uMax, float vMin, float vMax,
+		int uCount, int vCount,
+		float arrowScale = 0.3f, vec3 color = vec3(0, 0, 1));
+
+	// Generate Frenet frame (T/N/B) at a single point on a curve
+	static std::vector<VertexAttributes> generateFrenetFrame(
+		std::function<vec3(float)> curveFunc,
+		float tMin, float tMax, float tNorm,
+		float arrowScale = 0.5f);
+
+	// Generate gradient field arrows for a scalar function R^2->R^1
+	static std::vector<VertexAttributes> generateGradientField2D(
+		std::function<float(float, float)> scalarFunc,
+		float uMin, float uMax, float vMin, float vMax,
+		int uCount, int vCount,
+		float arrowScale = 0.3f);
+
+	// Generate gradient field arrows for a scalar function R^3->R^1
+	static std::vector<VertexAttributes> generateGradientField3D(
+		std::function<float(vec3)> scalarFunc,
+		vec3 rangeMin, vec3 rangeMax, ivec3 resolution,
+		float arrowScale = 0.3f);
+
 	// Map a value in [0,1] to a blue->green->red gradient (public for scalar field)
 	static vec3 magnitudeToColor(float t);
 

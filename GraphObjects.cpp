@@ -399,6 +399,320 @@ std::vector<VertexAttributes> GraphObjects::generateParametricSurface(
 	return verts;
 }
 
+// ─── Parametric Surface Wireframe ────────────────────────────────────────────
+
+std::vector<VertexAttributes> GraphObjects::generateParametricSurfaceWireframe(
+	std::function<vec3(float, float)> surfaceFunc,
+	float uMin, float uMax, float vMin, float vMax,
+	int uSegments, int vSegments,
+	vec3 color) {
+
+	std::vector<VertexAttributes> verts;
+	float du = (uMax - uMin) / uSegments;
+	float dv = (vMax - vMin) / vSegments;
+	vec3 zero(0, 0, 0);
+
+	// U-direction lines (constant v)
+	for (int j = 0; j <= vSegments; ++j) {
+		float v = vMin + j * dv;
+		for (int i = 0; i < uSegments; ++i) {
+			float u0 = uMin + i * du;
+			float u1 = uMin + (i + 1) * du;
+			verts.push_back({surfaceFunc(u0, v), zero, color, {0, 0}});
+			verts.push_back({surfaceFunc(u1, v), zero, color, {0, 0}});
+		}
+	}
+
+	// V-direction lines (constant u)
+	for (int i = 0; i <= uSegments; ++i) {
+		float u = uMin + i * du;
+		for (int j = 0; j < vSegments; ++j) {
+			float v0 = vMin + j * dv;
+			float v1 = vMin + (j + 1) * dv;
+			verts.push_back({surfaceFunc(u, v0), zero, color, {0, 0}});
+			verts.push_back({surfaceFunc(u, v1), zero, color, {0, 0}});
+		}
+	}
+
+	return verts;
+}
+
+// ─── Tangent Vectors ────────────────────────────────────────────────────────
+
+std::vector<VertexAttributes> GraphObjects::generateTangentVectors(
+	std::function<vec3(float)> curveFunc,
+	float tMin, float tMax, int count,
+	float arrowScale, vec3 color) {
+
+	std::vector<VertexAttributes> allVerts;
+	if (count < 1) return allVerts;
+
+	float eps = (tMax - tMin) * 1e-4f;
+
+	for (int i = 0; i < count; ++i) {
+		float t = tMin + (tMax - tMin) * i / std::max(count - 1, 1);
+		vec3 pos = curveFunc(t);
+		vec3 tangent = (curveFunc(t + eps) - curveFunc(t - eps)) / (2.0f * eps);
+		float mag = glm::length(tangent);
+		if (mag < 1e-6f) continue;
+		tangent /= mag;
+
+		float len = arrowScale;
+		auto mesh = generateArrowMesh(len * 0.7f, len * 0.02f, len * 0.3f, len * 0.06f, 6, color);
+
+		// Rotate from +Z to tangent direction
+		vec3 dir = tangent;
+		vec3 ref = (std::abs(dir.y) < 0.99f) ? vec3(0, 1, 0) : vec3(1, 0, 0);
+		vec3 xAxis = glm::normalize(glm::cross(ref, dir));
+		vec3 yAxis = glm::cross(dir, xAxis);
+
+		for (auto& v : mesh) {
+			vec3 rotPos = xAxis * v.position.x + yAxis * v.position.y + dir * v.position.z;
+			vec3 rotNorm = xAxis * v.normal.x + yAxis * v.normal.y + dir * v.normal.z;
+			v.position = rotPos + pos;
+			v.normal = rotNorm;
+		}
+
+		allVerts.insert(allVerts.end(), mesh.begin(), mesh.end());
+	}
+
+	return allVerts;
+}
+
+// ─── Surface Normals ────────────────────────────────────────────────────────
+
+std::vector<VertexAttributes> GraphObjects::generateSurfaceNormals(
+	std::function<vec3(float, float)> surfaceFunc,
+	float uMin, float uMax, float vMin, float vMax,
+	int uCount, int vCount,
+	float arrowScale, vec3 color) {
+
+	std::vector<VertexAttributes> allVerts;
+	float eps = 1e-4f;
+
+	for (int i = 0; i < uCount; ++i) {
+		float u = uMin + (uMax - uMin) * i / std::max(uCount - 1, 1);
+		for (int j = 0; j < vCount; ++j) {
+			float v = vMin + (vMax - vMin) * j / std::max(vCount - 1, 1);
+
+			vec3 pos = surfaceFunc(u, v);
+			vec3 dpdu = (surfaceFunc(u + eps, v) - surfaceFunc(u - eps, v)) / (2.0f * eps);
+			vec3 dpdv = (surfaceFunc(u, v + eps) - surfaceFunc(u, v - eps)) / (2.0f * eps);
+			vec3 normal = glm::cross(dpdu, dpdv);
+			float mag = glm::length(normal);
+			if (mag < 1e-8f) continue;
+			normal /= mag;
+
+			float len = arrowScale;
+			auto mesh = generateArrowMesh(len * 0.7f, len * 0.02f, len * 0.3f, len * 0.06f, 6, color);
+
+			vec3 dir = normal;
+			vec3 ref = (std::abs(dir.y) < 0.99f) ? vec3(0, 1, 0) : vec3(1, 0, 0);
+			vec3 xAxis = glm::normalize(glm::cross(ref, dir));
+			vec3 yAxis = glm::cross(dir, xAxis);
+
+			for (auto& v : mesh) {
+				vec3 rotPos = xAxis * v.position.x + yAxis * v.position.y + dir * v.position.z;
+				vec3 rotNorm = xAxis * v.normal.x + yAxis * v.normal.y + dir * v.normal.z;
+				v.position = rotPos + pos;
+				v.normal = rotNorm;
+			}
+
+			allVerts.insert(allVerts.end(), mesh.begin(), mesh.end());
+		}
+	}
+
+	return allVerts;
+}
+
+// ─── Frenet Frame ───────────────────────────────────────────────────────────
+
+std::vector<VertexAttributes> GraphObjects::generateFrenetFrame(
+	std::function<vec3(float)> curveFunc,
+	float tMin, float tMax, float tNorm,
+	float arrowScale) {
+
+	std::vector<VertexAttributes> allVerts;
+
+	float t = tMin + tNorm * (tMax - tMin);
+	float eps = (tMax - tMin) * 1e-4f;
+
+	// First derivative (tangent)
+	vec3 r1 = (curveFunc(t + eps) - curveFunc(t - eps)) / (2.0f * eps);
+	// Second derivative
+	vec3 r2 = (curveFunc(t + eps) - 2.0f * curveFunc(t) + curveFunc(t - eps)) / (eps * eps);
+
+	float r1Mag = glm::length(r1);
+	if (r1Mag < 1e-6f) return allVerts;
+
+	vec3 T = r1 / r1Mag;
+
+	// Normal: derivative of T direction, approximated by N = (r'' - (r''·T)T) / |...|
+	vec3 nComp = r2 - glm::dot(r2, T) * T;
+	float nMag = glm::length(nComp);
+	vec3 N, B;
+	if (nMag > 1e-6f) {
+		N = nComp / nMag;
+		B = glm::cross(T, N);
+	} else {
+		// Straight line — pick arbitrary perpendicular
+		vec3 ref = (std::abs(T.y) < 0.9f) ? vec3(0, 1, 0) : vec3(1, 0, 0);
+		N = glm::normalize(glm::cross(T, ref));
+		B = glm::cross(T, N);
+	}
+
+	vec3 pos = curveFunc(t);
+
+	// Colors: T=red, N=green, B=blue
+	vec3 colors[3] = { vec3(1, 0, 0), vec3(0, 1, 0), vec3(0, 0, 1) };
+	vec3 dirs[3] = { T, N, B };
+
+	for (int k = 0; k < 3; ++k) {
+		float len = arrowScale;
+		auto mesh = generateArrowMesh(len * 0.7f, len * 0.025f, len * 0.3f, len * 0.07f, 6, colors[k]);
+
+		vec3 dir = dirs[k];
+		vec3 ref = (std::abs(dir.y) < 0.99f) ? vec3(0, 1, 0) : vec3(1, 0, 0);
+		vec3 xAxis = glm::normalize(glm::cross(ref, dir));
+		vec3 yAxis = glm::cross(dir, xAxis);
+
+		for (auto& v : mesh) {
+			vec3 rotPos = xAxis * v.position.x + yAxis * v.position.y + dir * v.position.z;
+			vec3 rotNorm = xAxis * v.normal.x + yAxis * v.normal.y + dir * v.normal.z;
+			v.position = rotPos + pos;
+			v.normal = rotNorm;
+		}
+
+		allVerts.insert(allVerts.end(), mesh.begin(), mesh.end());
+	}
+
+	return allVerts;
+}
+
+// ─── Gradient Field 2D ──────────────────────────────────────────────────────
+
+std::vector<VertexAttributes> GraphObjects::generateGradientField2D(
+	std::function<float(float, float)> scalarFunc,
+	float uMin, float uMax, float vMin, float vMax,
+	int uCount, int vCount,
+	float arrowScale) {
+
+	std::vector<VertexAttributes> allVerts;
+	float eps = 1e-3f;
+
+	// First pass: compute gradients and find max magnitude
+	struct GradInfo { vec3 pos; vec3 grad; float mag; };
+	std::vector<GradInfo> grads;
+	float maxMag = 1e-6f;
+
+	for (int i = 0; i < uCount; ++i) {
+		float u = uMin + (uMax - uMin) * i / std::max(uCount - 1, 1);
+		for (int j = 0; j < vCount; ++j) {
+			float v = vMin + (vMax - vMin) * j / std::max(vCount - 1, 1);
+
+			float dfdu = (scalarFunc(u + eps, v) - scalarFunc(u - eps, v)) / (2.0f * eps);
+			float dfdv = (scalarFunc(u, v + eps) - scalarFunc(u, v - eps)) / (2.0f * eps);
+			float fval = scalarFunc(u, v);
+
+			// Gradient lies in the xy-plane for R^2->R^1 height fields (u,v,f(u,v))
+			vec3 pos(u, v, fval);
+			vec3 grad(dfdu, dfdv, 0.0f);
+			float mag = glm::length(grad);
+			maxMag = std::max(maxMag, mag);
+			grads.push_back({pos, grad, mag});
+		}
+	}
+
+	for (auto& g : grads) {
+		if (g.mag < 1e-6f) continue;
+
+		float normalizedMag = g.mag / maxMag;
+		float len = arrowScale * (0.2f + 0.8f * normalizedMag);
+		vec3 color = magnitudeToColor(normalizedMag);
+
+		auto mesh = generateArrowMesh(len * 0.7f, len * 0.02f, len * 0.3f, len * 0.06f, 6, color);
+
+		vec3 dir = glm::normalize(g.grad);
+		vec3 ref = (std::abs(dir.y) < 0.99f) ? vec3(0, 1, 0) : vec3(1, 0, 0);
+		vec3 xAxis = glm::normalize(glm::cross(ref, dir));
+		vec3 yAxis = glm::cross(dir, xAxis);
+
+		for (auto& v : mesh) {
+			vec3 rotPos = xAxis * v.position.x + yAxis * v.position.y + dir * v.position.z;
+			vec3 rotNorm = xAxis * v.normal.x + yAxis * v.normal.y + dir * v.normal.z;
+			v.position = rotPos + g.pos;
+			v.normal = rotNorm;
+		}
+
+		allVerts.insert(allVerts.end(), mesh.begin(), mesh.end());
+	}
+
+	return allVerts;
+}
+
+// ─── Gradient Field 3D ──────────────────────────────────────────────────────
+
+std::vector<VertexAttributes> GraphObjects::generateGradientField3D(
+	std::function<float(vec3)> scalarFunc,
+	vec3 rangeMin, vec3 rangeMax, ivec3 resolution,
+	float arrowScale) {
+
+	std::vector<VertexAttributes> allVerts;
+	float eps = 1e-3f;
+
+	vec3 step = (rangeMax - rangeMin) / vec3(
+		std::max(resolution.x - 1, 1),
+		std::max(resolution.y - 1, 1),
+		std::max(resolution.z - 1, 1)
+	);
+
+	struct GradInfo { vec3 pos; vec3 grad; float mag; };
+	std::vector<GradInfo> grads;
+	float maxMag = 1e-6f;
+
+	for (int ix = 0; ix < resolution.x; ++ix) {
+		for (int iy = 0; iy < resolution.y; ++iy) {
+			for (int iz = 0; iz < resolution.z; ++iz) {
+				vec3 pos = rangeMin + vec3(ix, iy, iz) * step;
+				float dfdx = (scalarFunc(pos + vec3(eps, 0, 0)) - scalarFunc(pos - vec3(eps, 0, 0))) / (2.0f * eps);
+				float dfdy = (scalarFunc(pos + vec3(0, eps, 0)) - scalarFunc(pos - vec3(0, eps, 0))) / (2.0f * eps);
+				float dfdz = (scalarFunc(pos + vec3(0, 0, eps)) - scalarFunc(pos - vec3(0, 0, eps))) / (2.0f * eps);
+
+				vec3 grad(dfdx, dfdy, dfdz);
+				float mag = glm::length(grad);
+				maxMag = std::max(maxMag, mag);
+				grads.push_back({pos, grad, mag});
+			}
+		}
+	}
+
+	for (auto& g : grads) {
+		if (g.mag < 1e-6f) continue;
+
+		float normalizedMag = g.mag / maxMag;
+		float len = arrowScale * (0.2f + 0.8f * normalizedMag);
+		vec3 color = magnitudeToColor(normalizedMag);
+
+		auto mesh = generateArrowMesh(len * 0.7f, len * 0.02f, len * 0.3f, len * 0.06f, 6, color);
+
+		vec3 dir = glm::normalize(g.grad);
+		vec3 ref = (std::abs(dir.y) < 0.99f) ? vec3(0, 1, 0) : vec3(1, 0, 0);
+		vec3 xAxis = glm::normalize(glm::cross(ref, dir));
+		vec3 yAxis = glm::cross(dir, xAxis);
+
+		for (auto& v : mesh) {
+			vec3 rotPos = xAxis * v.position.x + yAxis * v.position.y + dir * v.position.z;
+			vec3 rotNorm = xAxis * v.normal.x + yAxis * v.normal.y + dir * v.normal.z;
+			v.position = rotPos + g.pos;
+			v.normal = rotNorm;
+		}
+
+		allVerts.insert(allVerts.end(), mesh.begin(), mesh.end());
+	}
+
+	return allVerts;
+}
+
 // ─── Colored Cube ───────────────────────────────────────────────────────────
 
 std::vector<VertexAttributes> GraphObjects::generateColoredCube(float halfSize, vec3 color) {
