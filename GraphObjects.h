@@ -72,7 +72,7 @@ public:
 		std::function<vec3(float, float)> surfaceFunc,
 		float uMin, float uMax, float vMin, float vMax,
 		int uCount, int vCount,
-		float arrowScale = 0.3f, vec3 color = vec3(0, 0, 1));
+		float arrowScale = 0.3f, vec3 color = vec3(0, 0, 1), bool flipNormal = false);
 
 	// Generate Frenet frame (T/N/B) at a single point on a curve
 	static std::vector<VertexAttributes> generateFrenetFrame(

@@ -485,7 +485,7 @@ std::vector<VertexAttributes> GraphObjects::generateSurfaceNormals(
 	std::function<vec3(float, float)> surfaceFunc,
 	float uMin, float uMax, float vMin, float vMax,
 	int uCount, int vCount,
-	float arrowScale, vec3 color) {
+	float arrowScale, vec3 color, bool flipNormal) {
 
 	std::vector<VertexAttributes> allVerts;
 	float eps = 1e-4f;
@@ -499,6 +499,7 @@ std::vector<VertexAttributes> GraphObjects::generateSurfaceNormals(
 			vec3 dpdu = (surfaceFunc(u + eps, v) - surfaceFunc(u - eps, v)) / (2.0f * eps);
 			vec3 dpdv = (surfaceFunc(u, v + eps) - surfaceFunc(u, v - eps)) / (2.0f * eps);
 			vec3 normal = glm::cross(dpdu, dpdv);
+			if (flipNormal) normal = -normal;
 			float mag = glm::length(normal);
 			if (mag < 1e-8f) continue;
 			normal /= mag;

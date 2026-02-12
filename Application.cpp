@@ -22,6 +22,7 @@
 #include <sstream>
 #include <array>
 #include <cmath>
+#include <map>
 
 using VertexAttributes = ResourceManager::VertexAttributes;
 
@@ -1492,8 +1493,8 @@ bool Application::initGraphObjects() {
 	helix.exprStrings[0] = "cos(t)";
 	helix.exprStrings[1] = "sin(t)";
 	helix.exprStrings[2] = "t/(2*pi)";
-	helix.rangeMin[0] = 0.0f;
-	helix.rangeMax[0] = 25.13f;
+	helix.rangeMin[0] = -5.0f;
+	helix.rangeMax[0] = 5.0f;
 	helix.resolution[0] = 200;
 	helix.tubeRadius = 0.03f;
 	helix.color[0] = 1.0f; helix.color[1] = 1.0f; helix.color[2] = 0.0f;
@@ -1642,7 +1643,7 @@ void Application::updateGraphObjects() {
 					fd.rangeMin[0], fd.rangeMax[0],
 					fd.rangeMin[1], fd.rangeMax[1],
 					nCount, nCount,
-					fd.overlayVectorScale, vec3(0.2f, 0.4f, 1.0f));
+					fd.overlayVectorScale, vec3(0.2f, 0.4f, 1.0f), fd.flipNormalVectors);
 				surfaceVerts.insert(surfaceVerts.end(), normalVerts.begin(), normalVerts.end());
 			}
 
@@ -1771,24 +1772,26 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 			std::string headerLabel = fd.name + "(" + params + ")###func" + std::to_string(fi);
 
 			if (ImGui::CollapsingHeader(headerLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-				dirty |= ImGui::Checkbox("Show", &fd.show);
+				ImGui::Text("Show"); ImGui::SameLine(); dirty |= ImGui::Checkbox("##show", &fd.show);
 				ImGui::SameLine();
 
 				// Input dim selector
 				int prevInputDim = fd.inputDim;
+				ImGui::Text("In"); ImGui::SameLine();
 				ImGui::SetNextItemWidth(80);
 				const char* inputDimLabels[] = {"1", "2", "3"};
 				int inputDimIdx = fd.inputDim - 1;
-				if (ImGui::Combo("In##dim", &inputDimIdx, inputDimLabels, 3)) {
+				if (ImGui::Combo("##indim", &inputDimIdx, inputDimLabels, 3)) {
 					fd.inputDim = inputDimIdx + 1;
 					dirty = true;
 				}
 				ImGui::SameLine();
 
 				// Output dim selector
+				ImGui::Text("Out"); ImGui::SameLine();
 				ImGui::SetNextItemWidth(80);
 				int outputDimIdx = fd.outputDim - 1;
-				if (ImGui::Combo("Out##dim", &outputDimIdx, inputDimLabels, 3)) {
+				if (ImGui::Combo("##outdim", &outputDimIdx, inputDimLabels, 3)) {
 					fd.outputDim = outputDimIdx + 1;
 					dirty = true;
 				}
@@ -1803,9 +1806,11 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 				}
 
 				// Name + param names
+				ImGui::Text("Function"); ImGui::SameLine();
 				ImGui::SetNextItemWidth(60);
-				dirty |= ImGui::InputText("Name", &fd.name);
+				dirty |= ImGui::InputText("##name", &fd.name);
 				ImGui::SameLine();
+				ImGui::Text("Variable(s)"); ImGui::SameLine();
 				for (int i = 0; i < fd.inputDim; ++i) {
 					ImGui::SameLine();
 					ImGui::SetNextItemWidth(40);
@@ -1815,7 +1820,9 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 
 				// Expression text fields
 				for (int i = 0; i < fd.outputDim; ++i) {
-					std::string label = "f" + std::to_string(i + 1) + "##expr" + std::to_string(i);
+					std::string labelText = (fd.outputDim == 1) ? fd.name : fd.name + std::to_string(i + 1);
+					ImGui::Text("%s", labelText.c_str()); ImGui::SameLine();
+					std::string label = "##expr" + std::to_string(i);
 					dirty |= ImGui::InputText(label.c_str(), &fd.exprStrings[i]);
 				}
 
@@ -1839,9 +1846,9 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 							{"Lissajous", {"2*sin(2*t)", "2*sin(3*t)", "2*cos(5*t)"}},
 						};
 						presetRanges = {
-							{0, 25.13f, 0, 0, 0, 0},
-							{0, 6.283f, 0, 0, 0, 0},
-							{0, 6.283f, 0, 0, 0, 0},
+							{-5, 5, 0, 0, 0, 0},
+							{-5, 5, 0, 0, 0, 0},
+							{-5, 5, 0, 0, 0, 0},
 						};
 					} else if (n == 1 && m == 1) {
 						presets = {
@@ -1850,7 +1857,7 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 							{"exp(-t^2)", {"exp(-t^2)"}},
 						};
 						presetRanges = {
-							{-6.283f, 6.283f, 0, 0, 0, 0},
+							{-5, 5, 0, 0, 0, 0},
 							{-5, 5, 0, 0, 0, 0},
 							{-5, 5, 0, 0, 0, 0},
 						};
@@ -1860,8 +1867,8 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 							{"Lemniscate", {"cos(t)/(1+sin(t)^2)", "sin(t)*cos(t)/(1+sin(t)^2)"}},
 						};
 						presetRanges = {
-							{0, 6.283f, 0, 0, 0, 0},
-							{0, 6.283f, 0, 0, 0, 0},
+							{-5, 5, 0, 0, 0, 0},
+							{-5, 5, 0, 0, 0, 0},
 						};
 					} else if (n == 2 && m == 3) {
 						presets = {
@@ -1870,9 +1877,9 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 							{"Mobius", {"(1+v/2*cos(u/2))*cos(u)", "(1+v/2*cos(u/2))*sin(u)", "v/2*sin(u/2)"}},
 						};
 						presetRanges = {
-							{0, 6.283f, 0, 3.1416f, 0, 0},
-							{0, 6.283f, 0, 6.283f, 0, 0},
-							{0, 6.283f, -0.5f, 0.5f, 0, 0},
+							{-5, 5, -5, 5, 0, 0},
+							{-5, 5, -5, 5, 0, 0},
+							{-5, 5, -5, 5, 0, 0},
 						};
 					} else if (n == 2 && m == 1) {
 						presets = {
@@ -1947,29 +1954,25 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 
 				// Range controls
 				if (fd.inputDim == 1) {
-					dirty |= ImGui::DragFloat("t min", &fd.rangeMin[0], 0.1f);
-					ImGui::SameLine();
-					dirty |= ImGui::DragFloat("t max", &fd.rangeMax[0], 0.1f);
-					dirty |= ImGui::SliderInt("Segments", &fd.resolution[0], 10, 500);
-					dirty |= ImGui::SliderFloat("Tube Radius", &fd.tubeRadius, 0.005f, 0.2f);
+					ImGui::Text("t min"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##tmin", &fd.rangeMin[0], 0.1f);
+					ImGui::Text("t max"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##tmax", &fd.rangeMax[0], 0.1f);
+					ImGui::Text("Segments"); ImGui::SameLine(); dirty |= ImGui::DragInt("##segments", &fd.resolution[0], 1.0f, 10, 500);
+					ImGui::Text("Tube Radius"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##tuberadius", &fd.tubeRadius, 0.001f, 0.005f, 0.2f);
 				} else if (fd.inputDim == 2) {
-					dirty |= ImGui::DragFloatRange2("U Range", &fd.rangeMin[0], &fd.rangeMax[0], 0.1f, -20.0f, 20.0f);
-					dirty |= ImGui::DragFloatRange2("V Range", &fd.rangeMin[1], &fd.rangeMax[1], 0.1f, -20.0f, 20.0f);
-					dirty |= ImGui::SliderInt("U Res", &fd.resolution[0], 4, 100);
-					dirty |= ImGui::SliderInt("V Res", &fd.resolution[1], 4, 100);
+					ImGui::Text("U Range"); ImGui::SameLine(); dirty |= ImGui::DragFloatRange2("##urange", &fd.rangeMin[0], &fd.rangeMax[0], 0.1f, -20.0f, 20.0f);
+					ImGui::Text("V Range"); ImGui::SameLine(); dirty |= ImGui::DragFloatRange2("##vrange", &fd.rangeMin[1], &fd.rangeMax[1], 0.1f, -20.0f, 20.0f);
+					ImGui::Text("U Res"); ImGui::SameLine(); dirty |= ImGui::DragInt("##ures", &fd.resolution[0], 1.0f, 4, 300);
+					ImGui::Text("V Res"); ImGui::SameLine(); dirty |= ImGui::DragInt("##vres", &fd.resolution[1], 1.0f, 4, 300);
 				} else if (fd.inputDim == 3) {
-					dirty |= ImGui::DragFloat("X Min", &fd.rangeMin[0], 0.1f, -20.0f, 0.0f);
-					ImGui::SameLine();
-					dirty |= ImGui::DragFloat("X Max", &fd.rangeMax[0], 0.1f, 0.0f, 20.0f);
-					dirty |= ImGui::DragFloat("Y Min", &fd.rangeMin[1], 0.1f, -20.0f, 0.0f);
-					ImGui::SameLine();
-					dirty |= ImGui::DragFloat("Y Max", &fd.rangeMax[1], 0.1f, 0.0f, 20.0f);
-					dirty |= ImGui::DragFloat("Z Min", &fd.rangeMin[2], 0.1f, -20.0f, 0.0f);
-					ImGui::SameLine();
-					dirty |= ImGui::DragFloat("Z Max", &fd.rangeMax[2], 0.1f, 0.0f, 20.0f);
-					dirty |= ImGui::SliderInt("Resolution##vf", &fd.vfResolution, 2, 10);
+					ImGui::Text("X Min"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##xmin", &fd.rangeMin[0], 0.1f, -20.0f, 0.0f);
+					ImGui::Text("X Max"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##xmax", &fd.rangeMax[0], 0.1f, 0.0f, 20.0f);
+					ImGui::Text("Y Min"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##ymin", &fd.rangeMin[1], 0.1f, -20.0f, 0.0f);
+					ImGui::Text("Y Max"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##ymax", &fd.rangeMax[1], 0.1f, 0.0f, 20.0f);
+					ImGui::Text("Z Min"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##zmin", &fd.rangeMin[2], 0.1f, -20.0f, 0.0f);
+					ImGui::Text("Z Max"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##zmax", &fd.rangeMax[2], 0.1f, 0.0f, 20.0f);
+					ImGui::Text("Resolution"); ImGui::SameLine(); dirty |= ImGui::DragInt("##vfres", &fd.vfResolution, 0.1f, 2, 10);
 					if (fd.outputDim >= 2) {
-						dirty |= ImGui::SliderFloat("Arrow Scale", &fd.arrowScale, 0.05f, 2.0f);
+						ImGui::Text("Arrow Scale"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##arrowscale", &fd.arrowScale, 0.01f, 0.05f, 2.0f);
 					}
 				}
 
@@ -1983,12 +1986,17 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 					dirty |= ImGui::Checkbox("Tangent Vectors", &fd.showTangentVectors);
 					dirty |= ImGui::Checkbox("Frenet Frame (TNB)", &fd.showFrenetFrame);
 					if (fd.showFrenetFrame) {
-						dirty |= ImGui::SliderFloat("Frame Position", &fd.frenetT, 0.0f, 1.0f);
+						ImGui::Text("Frame Position"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##frenetpos", &fd.frenetT, 0.01f, 0.0f, 1.0f);
 					}
 				} else if (fd.inputDim == 2) {
 					// Surface overlays
 					dirty |= ImGui::Checkbox("Wireframe", &fd.wireframe);
 					dirty |= ImGui::Checkbox("Normal Vectors", &fd.showNormalVectors);
+					if (fd.showNormalVectors) {
+						ImGui::Indent();
+						dirty |= ImGui::Checkbox("Flip Normal Direction", &fd.flipNormalVectors);
+						ImGui::Unindent();
+					}
 					if (fd.outputDim == 1) {
 						dirty |= ImGui::Checkbox("Gradient Field", &fd.showGradientField);
 					}
@@ -1997,8 +2005,8 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 					dirty |= ImGui::Checkbox("Gradient Field", &fd.showGradientField);
 				}
 				if (fd.showTangentVectors || fd.showNormalVectors || fd.showFrenetFrame || fd.showGradientField) {
-					dirty |= ImGui::SliderInt("Overlay Count", &fd.overlayVectorCount, 2, 100);
-					dirty |= ImGui::SliderFloat("Overlay Scale", &fd.overlayVectorScale, 0.05f, 1.5f);
+					ImGui::Text("Overlay Count"); ImGui::SameLine(); dirty |= ImGui::DragInt("##overlaycount", &fd.overlayVectorCount, 0.5f, 2, 100);
+					ImGui::Text("Overlay Scale"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##overlayscale", &fd.overlayVectorScale, 0.01f, 0.05f, 1.5f);
 				}
 
 				if (ImGui::Button("Remove")) {
@@ -2026,8 +2034,8 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 			newFd.exprStrings[0] = "cos(t)";
 			newFd.exprStrings[1] = "sin(t)";
 			newFd.exprStrings[2] = "0";
-			newFd.rangeMin[0] = 0;
-			newFd.rangeMax[0] = 6.283f;
+			newFd.rangeMin[0] = -5.0f;
+			newFd.rangeMax[0] = 5.0f;
 			newFd.resolution[0] = 200;
 			compileFunctionDef(newFd);
 			m_functions.push_back(std::move(newFd));
@@ -2060,8 +2068,8 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 				axesDirty |= ImGui::Checkbox("XZ Plane", &m_showXZGrid);
 				ImGui::SameLine();
 				axesDirty |= ImGui::Checkbox("YZ Plane", &m_showYZGrid);
-				axesDirty |= ImGui::SliderFloat("Grid Spacing", &m_gridSpacing, 0.25f, 5.0f);
-				axesDirty |= ImGui::SliderFloat("Grid Extent", &m_gridExtent, 1.0f, 50.0f);
+				ImGui::Text("Grid Spacing"); ImGui::SameLine(); axesDirty |= ImGui::DragFloat("##gridspacing", &m_gridSpacing, 0.05f, 0.25f, 5.0f);
+				ImGui::Text("Grid Extent"); ImGui::SameLine(); axesDirty |= ImGui::DragFloat("##gridextent", &m_gridExtent, 0.5f, 1.0f, 50.0f);
 				axesDirty |= ImGui::ColorEdit3("Grid Color", m_gridColor);
 			}
 			axesDirty |= ImGui::ColorEdit3("X Axis", m_axisColors[0]);
@@ -2086,9 +2094,9 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 			lightingChanged |= ImGui::DragDirection("Direction #0", m_lightingUniforms.directions[0]);
 			lightingChanged |= ImGui::ColorEdit3("Color #1", glm::value_ptr(m_lightingUniforms.colors[1]));
 			lightingChanged |= ImGui::DragDirection("Direction #1", m_lightingUniforms.directions[1]);
-			lightingChanged |= ImGui::SliderFloat("Hardness", &m_lightingUniforms.hardness, 1.0f, 100.0f);
-			lightingChanged |= ImGui::SliderFloat("K Diffuse", &m_lightingUniforms.kd, 0.0f, 1.0f);
-			lightingChanged |= ImGui::SliderFloat("K Specular", &m_lightingUniforms.ks, 0.0f, 1.0f);
+			ImGui::Text("Hardness"); ImGui::SameLine(); lightingChanged |= ImGui::DragFloat("##hardness", &m_lightingUniforms.hardness, 1.0f, 1.0f, 100.0f);
+			ImGui::Text("K Diffuse"); ImGui::SameLine(); lightingChanged |= ImGui::DragFloat("##kdiffuse", &m_lightingUniforms.kd, 0.01f, 0.0f, 1.0f);
+			ImGui::Text("K Specular"); ImGui::SameLine(); lightingChanged |= ImGui::DragFloat("##kspecular", &m_lightingUniforms.ks, 0.01f, 0.0f, 1.0f);
 		}
 
 		ImGui::PopItemWidth();
@@ -2119,8 +2127,8 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 				else if (fd.inputDim == 2) typeLabel = "Surface";
 				else if (fd.inputDim == 3 && fd.outputDim == 1) typeLabel = "Scalar Field";
 				else typeLabel = "Vector Field";
-				typeLabel += "  " + fd.name + ":R" + (fd.inputDim > 1 ? "^" + std::to_string(fd.inputDim) : "")
-					+ " -> R" + (fd.outputDim > 1 ? "^" + std::to_string(fd.outputDim) : "");
+				typeLabel += "  " + fd.name + ": R" + (fd.inputDim > 1 ? "^" + std::to_string(fd.inputDim) : "")
+					+ " -> R" + (fd.outputDim > 1 ? "^" + std::to_string(fd.outputDim) : "") + ",  ";
 
 				// Build expression string: "r(t) = (cos(t), sin(t), t/(2*pi))"
 				std::string exprText = fd.name + "(" + params + ") = ";
@@ -2135,7 +2143,11 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 					exprText += ")";
 				}
 
-				std::string label = typeLabel + ":  " + exprText;
+				std::string label = typeLabel + exprText;
+
+				// Static map to track expanded state per function
+				static std::map<int, bool> expandedStates;
+				bool& expanded = expandedStates[fi];
 
 				// Measure text size to position from top-right
 				ImVec2 textSize = ImGui::CalcTextSize(label.c_str());
@@ -2143,16 +2155,41 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 
 				ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - windowWidth - padding, yOffset), ImGuiCond_Always);
 				ImGui::SetNextWindowSize(ImVec2(0, 0));
-				ImGui::SetNextWindowBgAlpha(0.5f);
+				ImGui::SetNextWindowBgAlpha(0.7f);
 
 				std::string overlayId = "##overlay" + std::to_string(fi);
 				ImGui::Begin(overlayId.c_str(), nullptr,
-					ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
-					ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
-					ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+					ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+					ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing);
 
 				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(fd.color[0], fd.color[1], fd.color[2], 1.0f));
-				ImGui::TextUnformatted(label.c_str());
+
+				// Main label is clickable
+				if (ImGui::Selectable(label.c_str(), expanded, ImGuiSelectableFlags_None)) {
+					expanded = !expanded;
+				}
+
+				// Show details when expanded
+				if (expanded) {
+					ImGui::Separator();
+					ImGui::Text("Range:");
+					if (fd.inputDim >= 1) {
+						ImGui::Text("  %s: [%.2f, %.2f]", fd.paramNames[0].c_str(), fd.rangeMin[0], fd.rangeMax[0]);
+					}
+					if (fd.inputDim >= 2) {
+						ImGui::Text("  %s: [%.2f, %.2f]", fd.paramNames[1].c_str(), fd.rangeMin[1], fd.rangeMax[1]);
+					}
+					if (fd.inputDim >= 3) {
+						ImGui::Text("  %s: [%.2f, %.2f]", fd.paramNames[2].c_str(), fd.rangeMin[2], fd.rangeMax[2]);
+					}
+					ImGui::Text("Resolution:");
+					if (fd.inputDim == 1) {
+						ImGui::Text("  Segments: %d", fd.resolution[0]);
+					} else if (fd.inputDim == 2) {
+						ImGui::Text("  U: %d, V: %d", fd.resolution[0], fd.resolution[1]);
+					}
+				}
+
 				ImGui::PopStyleColor();
 
 				yOffset += ImGui::GetWindowHeight() + 4.0f;
