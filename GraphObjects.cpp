@@ -801,3 +801,200 @@ std::vector<VertexAttributes> GraphObjects::generateScalarField(
 
 	return allVerts;
 }
+// Add these functions to the end of GraphObjects.cpp
+
+std::vector<VertexAttributes> GraphObjects::generateCurveNormals(
+	std::function<vec3(float)> curveFunc,
+	float tMin, float tMax, int count,
+	float arrowScale, vec3 color, bool flipNormal) {
+
+	std::vector<VertexAttributes> allVerts;
+	if (count < 1) return allVerts;
+
+	float eps = (tMax - tMin) * 1e-4f;
+
+	for (int i = 0; i < count; ++i) {
+		float t = tMin + (tMax - tMin) * i / std::max(count - 1, 1);
+		vec3 pos = curveFunc(t);
+
+		// Compute tangent
+		vec3 tangent = (curveFunc(t + eps) - curveFunc(t - eps)) / (2.0f * eps);
+		float mag = glm::length(tangent);
+		if (mag < 1e-6f) continue;
+		tangent /= mag;
+
+		// Compute second derivative for curvature
+		vec3 accel = (curveFunc(t + eps) - 2.0f * pos + curveFunc(t - eps)) / (eps * eps);
+
+		// Normal is perpendicular to tangent, in the plane of curvature
+		vec3 normal = accel - glm::dot(accel, tangent) * tangent;
+		float normMag = glm::length(normal);
+		if (normMag < 1e-6f) {
+			// If curvature is zero, pick an arbitrary perpendicular
+			vec3 ref = (std::abs(tangent.y) < 0.99f) ? vec3(0, 1, 0) : vec3(1, 0, 0);
+			normal = glm::normalize(glm::cross(tangent, ref));
+		} else {
+			normal /= normMag;
+		}
+
+		// Apply flip if requested
+		if (flipNormal) normal = -normal;
+
+		float len = arrowScale;
+		auto mesh = generateArrowMesh(len * 0.7f, len * 0.02f, len * 0.3f, len * 0.06f, 6, color);
+
+		// Rotate from +Z to normal direction
+		vec3 dir = normal;
+		vec3 ref = (std::abs(dir.y) < 0.99f) ? vec3(0, 1, 0) : vec3(1, 0, 0);
+		vec3 xAxis = glm::normalize(glm::cross(ref, dir));
+		vec3 yAxis = glm::cross(dir, xAxis);
+
+		for (auto& v : mesh) {
+			vec3 rotPos = xAxis * v.position.x + yAxis * v.position.y + dir * v.position.z;
+			vec3 rotNorm = xAxis * v.normal.x + yAxis * v.normal.y + dir * v.normal.z;
+			v.position = rotPos + pos;
+			v.normal = rotNorm;
+		}
+
+		allVerts.insert(allVerts.end(), mesh.begin(), mesh.end());
+	}
+
+	return allVerts;
+}
+
+std::vector<VertexAttributes> GraphObjects::generateSurfaceTangents(
+	std::function<vec3(float, float)> surfaceFunc,
+	float uMin, float uMax, float vMin, float vMax,
+	int uCount, int vCount,
+	float arrowScale, vec3 color, int mode) {
+
+	(void)color;  // Using custom colors for u and v directions
+	std::vector<VertexAttributes> allVerts;
+	float eps = 1e-4f;
+
+	for (int i = 0; i < uCount; ++i) {
+		float u = uMin + (uMax - uMin) * i / std::max(uCount - 1, 1);
+		for (int j = 0; j < vCount; ++j) {
+			float v = vMin + (vMax - vMin) * j / std::max(vCount - 1, 1);
+
+			vec3 pos = surfaceFunc(u, v);
+			vec3 dpdu = (surfaceFunc(u + eps, v) - surfaceFunc(u - eps, v)) / (2.0f * eps);
+			vec3 dpdv = (surfaceFunc(u, v + eps) - surfaceFunc(u, v - eps)) / (2.0f * eps);
+
+			// Show tangents based on mode: 0=both, 1=u only, 2=v only
+			vec3 tangents[2] = {dpdu, dpdv};
+			vec3 colors[2] = {vec3(1.0f, 0.2f, 0.2f), vec3(0.2f, 1.0f, 0.2f)};
+			int startK = (mode == 2) ? 1 : 0;  // If v-only, start at k=1
+			int endK = (mode == 1) ? 1 : 2;    // If u-only, end at k=1
+
+			for (int k = startK; k < endK; ++k) {
+				vec3 tangent = tangents[k];
+				float mag = glm::length(tangent);
+				// Filter degenerate tangents more aggressively (poles, singularities)
+				if (mag < 1e-6f) continue;
+				tangent /= mag;
+
+				float len = arrowScale;
+				auto mesh = generateArrowMesh(len * 0.7f, len * 0.02f, len * 0.3f, len * 0.06f, 6, colors[k]);
+
+				vec3 dir = tangent;
+				vec3 ref = (std::abs(dir.y) < 0.99f) ? vec3(0, 1, 0) : vec3(1, 0, 0);
+				vec3 xAxis = glm::normalize(glm::cross(ref, dir));
+				vec3 yAxis = glm::cross(dir, xAxis);
+
+				for (auto& v : mesh) {
+					vec3 rotPos = xAxis * v.position.x + yAxis * v.position.y + dir * v.position.z;
+					vec3 rotNorm = xAxis * v.normal.x + yAxis * v.normal.y + dir * v.normal.z;
+					v.position = rotPos + pos;
+					v.normal = rotNorm;
+				}
+
+				allVerts.insert(allVerts.end(), mesh.begin(), mesh.end());
+			}
+		}
+	}
+
+	return allVerts;
+}
+
+std::vector<VertexAttributes> GraphObjects::generateStreamlines(
+	std::function<vec3(vec3)> fieldFunc,
+	vec3 rangeMin, vec3 rangeMax, ivec3 resolution,
+	int numStreamlines, float stepSize) {
+
+	std::vector<VertexAttributes> allVerts;
+
+	// Generate random starting points
+	vec3 range = rangeMax - rangeMin;
+
+	for (int i = 0; i < numStreamlines; ++i) {
+		// Start point (evenly spaced in a grid)
+		int idx = i;
+		int nx = std::max(resolution.x / 2, 2);
+		int ny = std::max(resolution.y / 2, 2);
+		int nz = std::max(resolution.z / 2, 2);
+
+		int ix = idx % nx;
+		int iy = (idx / nx) % ny;
+		int iz = (idx / (nx * ny)) % nz;
+
+		float u = (float)ix / (float)std::max(nx - 1, 1);
+		float v = (float)iy / (float)std::max(ny - 1, 1);
+		float w = (float)iz / (float)std::max(nz - 1, 1);
+
+		vec3 pos = rangeMin + range * vec3(u, v, w);
+
+		// Integrate streamline using RK4
+		int maxSteps = 200;
+		std::vector<vec3> streamline;
+		streamline.push_back(pos);
+
+		for (int step = 0; step < maxSteps; ++step) {
+			vec3 k1 = fieldFunc(pos);
+			vec3 k2 = fieldFunc(pos + k1 * (stepSize * 0.5f));
+			vec3 k3 = fieldFunc(pos + k2 * (stepSize * 0.5f));
+			vec3 k4 = fieldFunc(pos + k3 * stepSize);
+
+			vec3 vel = (k1 + 2.0f * k2 + 2.0f * k3 + k4) / 6.0f;
+			float mag = glm::length(vel);
+
+			if (mag < 1e-6f) break;  // Stagnation point
+
+			vec3 newPos = pos + vel * stepSize;
+
+			// Check bounds
+			if (newPos.x < rangeMin.x || newPos.x > rangeMax.x ||
+			    newPos.y < rangeMin.y || newPos.y > rangeMax.y ||
+			    newPos.z < rangeMin.z || newPos.z > rangeMax.z) {
+				break;
+			}
+
+			pos = newPos;
+			streamline.push_back(pos);
+		}
+
+		// Convert streamline to line segments
+		vec3 color = magnitudeToColor((float)i / (float)std::max(numStreamlines - 1, 1));
+
+		for (size_t j = 0; j + 1 < streamline.size(); ++j) {
+			vec3 p0 = streamline[j];
+			vec3 p1 = streamline[j + 1];
+
+			VertexAttributes v0, v1;
+			v0.position = p0;
+			v0.normal = vec3(0, 1, 0);
+			v0.color = color;
+			v0.uv = glm::vec2(0, 0);
+
+			v1.position = p1;
+			v1.normal = vec3(0, 1, 0);
+			v1.color = color;
+			v1.uv = glm::vec2(0, 0);
+
+			allVerts.push_back(v0);
+			allVerts.push_back(v1);
+		}
+	}
+
+	return allVerts;
+}

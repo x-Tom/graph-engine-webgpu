@@ -62,15 +62,19 @@ struct FunctionDefinition {
 	float tubeRadius = 0.03f;
 	float arrowScale = 0.3f;
 	int vfResolution = 5;
+	int curvePlane = 0;                  // For R^1->R^2 curves: 0=xy, 1=xz, 2=yz
 
 	// Overlay options
-	bool wireframe = false;           // surfaces only (n=2): render as wireframe
-	bool showTangentVectors = false;  // curves only (n=1): velocity arrows
-	bool showNormalVectors = false;   // surfaces only (n=2): normal arrows
-	bool flipNormalVectors = false;   // surfaces only (n=2): flip normal direction
+	bool wireframe = false;           // surfaces (n=2) and curves (n=1): render as wireframe/lines
+	bool showTangentVectors = false;  // curves (n=1) and surfaces (n=2): tangent arrows
+	int surfaceTangentMode = 0;       // For surfaces: 0=both u&v, 1=u only, 2=v only
+	bool showNormalVectors = false;   // surfaces (n=2) and curves (n=1): normal arrows
+	bool flipNormalVectors = false;   // surfaces and curves: flip normal direction
 	bool showFrenetFrame = false;     // curves only (n=1): T/N/B trihedron
 	float frenetT = 0.5f;            // parameter value for Frenet frame (normalized 0-1)
 	bool showGradientField = false;   // scalar fields (m=1): gradient arrows
+	bool showVectorField = false;     // vector fields (n=3, m>=2): show field arrows
+	bool showStreamlines = false;     // vector fields (n=3, m>=2): show streamlines
 	int overlayVectorCount = 10;      // how many tangent/normal arrows to show
 	float overlayVectorScale = 0.3f;  // scale of overlay arrows
 };
@@ -300,8 +304,9 @@ private:
 	bool m_graphObjectsDirty = true;
 
 	// Deferred buffer destruction (wait N frames before destroying)
-	static constexpr int BUFFER_RELEASE_DELAY = 3;
+	static constexpr int BUFFER_RELEASE_DELAY = 5;  // Increased from 3 to reduce crashes
 	std::vector<std::pair<WGPUBuffer, int>> m_pendingBufferReleases;
+	int m_framesSinceLastUpdate = 0;  // Throttle geometry updates
 	void deferBufferRelease(WGPUBuffer buffer);
 	void processPendingReleases();
 
