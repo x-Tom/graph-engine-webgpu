@@ -488,7 +488,9 @@ std::vector<VertexAttributes> GraphObjects::generateSurfaceNormals(
 	float arrowScale, vec3 color, bool flipNormal) {
 
 	std::vector<VertexAttributes> allVerts;
+	std::vector<vec3> placedPositions;  // Track arrow positions to avoid pole clustering
 	float eps = 1e-4f;
+	float minDist = 0.1f;  // Minimum distance between arrows (filters pole duplicates)
 
 	for (int i = 0; i < uCount; ++i) {
 		float u = uMin + (uMax - uMin) * i / std::max(uCount - 1, 1);
@@ -496,6 +498,17 @@ std::vector<VertexAttributes> GraphObjects::generateSurfaceNormals(
 			float v = vMin + (vMax - vMin) * j / std::max(vCount - 1, 1);
 
 			vec3 pos = surfaceFunc(u, v);
+
+			// Check if this position is too close to an already-placed arrow (pole clustering)
+			bool tooClose = false;
+			for (const auto& placedPos : placedPositions) {
+				if (glm::length(pos - placedPos) < minDist) {
+					tooClose = true;
+					break;
+				}
+			}
+			if (tooClose) continue;
+
 			vec3 dpdu = (surfaceFunc(u + eps, v) - surfaceFunc(u - eps, v)) / (2.0f * eps);
 			vec3 dpdv = (surfaceFunc(u, v + eps) - surfaceFunc(u, v - eps)) / (2.0f * eps);
 			vec3 normal = glm::cross(dpdu, dpdv);
@@ -520,6 +533,7 @@ std::vector<VertexAttributes> GraphObjects::generateSurfaceNormals(
 			}
 
 			allVerts.insert(allVerts.end(), mesh.begin(), mesh.end());
+			placedPositions.push_back(pos);  // Record this position
 		}
 	}
 
@@ -613,10 +627,9 @@ std::vector<VertexAttributes> GraphObjects::generateGradientField2D(
 
 			float dfdu = (scalarFunc(u + eps, v) - scalarFunc(u - eps, v)) / (2.0f * eps);
 			float dfdv = (scalarFunc(u, v + eps) - scalarFunc(u, v - eps)) / (2.0f * eps);
-			float fval = scalarFunc(u, v);
 
-			// Gradient lies in the xy-plane for R^2->R^1 height fields (u,v,f(u,v))
-			vec3 pos(u, v, fval);
+			// Gradient arrows displayed on xy-plane at z=0 for R^2->R^1 scalar fields
+			vec3 pos(u, v, 0.0f);
 			vec3 grad(dfdu, dfdv, 0.0f);
 			float mag = glm::length(grad);
 			maxMag = std::max(maxMag, mag);
@@ -870,7 +883,9 @@ std::vector<VertexAttributes> GraphObjects::generateSurfaceTangents(
 
 	(void)color;  // Using custom colors for u and v directions
 	std::vector<VertexAttributes> allVerts;
+	std::vector<vec3> placedPositions;  // Track arrow positions to avoid pole clustering
 	float eps = 1e-4f;
+	float minDist = 0.1f;  // Minimum distance between arrows (filters pole duplicates)
 
 	for (int i = 0; i < uCount; ++i) {
 		float u = uMin + (uMax - uMin) * i / std::max(uCount - 1, 1);
@@ -878,6 +893,17 @@ std::vector<VertexAttributes> GraphObjects::generateSurfaceTangents(
 			float v = vMin + (vMax - vMin) * j / std::max(vCount - 1, 1);
 
 			vec3 pos = surfaceFunc(u, v);
+
+			// Check if this position is too close to an already-placed arrow (pole clustering)
+			bool tooClose = false;
+			for (const auto& placedPos : placedPositions) {
+				if (glm::length(pos - placedPos) < minDist) {
+					tooClose = true;
+					break;
+				}
+			}
+			if (tooClose) continue;
+
 			vec3 dpdu = (surfaceFunc(u + eps, v) - surfaceFunc(u - eps, v)) / (2.0f * eps);
 			vec3 dpdv = (surfaceFunc(u, v + eps) - surfaceFunc(u, v - eps)) / (2.0f * eps);
 
@@ -887,6 +913,7 @@ std::vector<VertexAttributes> GraphObjects::generateSurfaceTangents(
 			int startK = (mode == 2) ? 1 : 0;  // If v-only, start at k=1
 			int endK = (mode == 1) ? 1 : 2;    // If u-only, end at k=1
 
+			bool placedAny = false;
 			for (int k = startK; k < endK; ++k) {
 				vec3 tangent = tangents[k];
 				float mag = glm::length(tangent);
@@ -910,6 +937,12 @@ std::vector<VertexAttributes> GraphObjects::generateSurfaceTangents(
 				}
 
 				allVerts.insert(allVerts.end(), mesh.begin(), mesh.end());
+				placedAny = true;
+			}
+
+			// Record this position to prevent pole clustering
+			if (placedAny) {
+				placedPositions.push_back(pos);
 			}
 		}
 	}
@@ -922,27 +955,20 @@ std::vector<VertexAttributes> GraphObjects::generateStreamlines(
 	vec3 rangeMin, vec3 rangeMax, ivec3 resolution,
 	int numStreamlines, float stepSize) {
 
+	(void)numStreamlines;  // Unused - we generate one streamline per grid point
 	std::vector<VertexAttributes> allVerts;
 
-	// Generate random starting points
-	vec3 range = rangeMax - rangeMin;
+	vec3 step = (rangeMax - rangeMin) / vec3(
+		std::max(resolution.x - 1, 1),
+		std::max(resolution.y - 1, 1),
+		std::max(resolution.z - 1, 1)
+	);
 
-	for (int i = 0; i < numStreamlines; ++i) {
-		// Start point (evenly spaced in a grid)
-		int idx = i;
-		int nx = std::max(resolution.x / 2, 2);
-		int ny = std::max(resolution.y / 2, 2);
-		int nz = std::max(resolution.z / 2, 2);
-
-		int ix = idx % nx;
-		int iy = (idx / nx) % ny;
-		int iz = (idx / (nx * ny)) % nz;
-
-		float u = (float)ix / (float)std::max(nx - 1, 1);
-		float v = (float)iy / (float)std::max(ny - 1, 1);
-		float w = (float)iz / (float)std::max(nz - 1, 1);
-
-		vec3 pos = rangeMin + range * vec3(u, v, w);
+	// Generate one streamline from each grid point (matching vector field positions)
+	for (int ix = 0; ix < resolution.x; ++ix) {
+		for (int iy = 0; iy < resolution.y; ++iy) {
+			for (int iz = 0; iz < resolution.z; ++iz) {
+				vec3 pos = rangeMin + vec3(ix, iy, iz) * step;
 
 		// Integrate streamline using RK4
 		int maxSteps = 200;
@@ -973,26 +999,30 @@ std::vector<VertexAttributes> GraphObjects::generateStreamlines(
 			streamline.push_back(pos);
 		}
 
-		// Convert streamline to line segments
-		vec3 color = magnitudeToColor((float)i / (float)std::max(numStreamlines - 1, 1));
+				// Convert streamline to line segments
+				// Color based on z-position for visual variety
+				float zNorm = (float)iz / (float)std::max(resolution.z - 1, 1);
+				vec3 color = magnitudeToColor(zNorm);
 
-		for (size_t j = 0; j + 1 < streamline.size(); ++j) {
-			vec3 p0 = streamline[j];
-			vec3 p1 = streamline[j + 1];
+				for (size_t j = 0; j + 1 < streamline.size(); ++j) {
+					vec3 p0 = streamline[j];
+					vec3 p1 = streamline[j + 1];
 
-			VertexAttributes v0, v1;
-			v0.position = p0;
-			v0.normal = vec3(0, 1, 0);
-			v0.color = color;
-			v0.uv = glm::vec2(0, 0);
+					VertexAttributes v0, v1;
+					v0.position = p0;
+					v0.normal = vec3(0, 1, 0);
+					v0.color = color;
+					v0.uv = glm::vec2(0, 0);
 
-			v1.position = p1;
-			v1.normal = vec3(0, 1, 0);
-			v1.color = color;
-			v1.uv = glm::vec2(0, 0);
+					v1.position = p1;
+					v1.normal = vec3(0, 1, 0);
+					v1.color = color;
+					v1.uv = glm::vec2(0, 0);
 
-			allVerts.push_back(v0);
-			allVerts.push_back(v1);
+					allVerts.push_back(v0);
+					allVerts.push_back(v1);
+				}
+			}
 		}
 	}
 

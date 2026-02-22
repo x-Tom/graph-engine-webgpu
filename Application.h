@@ -56,8 +56,9 @@ struct FunctionDefinition {
 	std::string errorMsg;
 	bool show = true;
 	float color[3] = {1.0f, 1.0f, 0.0f};
-	float rangeMin[3] = {-5.0f, -5.0f, -5.0f};
-	float rangeMax[3] = {5.0f, 5.0f, 5.0f};
+	float opacity = 1.0f;                // Surface/curve opacity (0=transparent, 1=opaque)
+	float rangeMin[3] = {-10.0f, -10.0f, -10.0f};
+	float rangeMax[3] = {10.0f, 10.0f, 10.0f};
 	int resolution[2] = {200, 200};      // [segments/uRes, vRes]
 	float tubeRadius = 0.03f;
 	float arrowScale = 0.3f;

@@ -16,6 +16,8 @@
 #include <backends/imgui_impl_glfw.h>
 #include <misc/cpp/imgui_stdlib.h>
 
+#include "tinyexpr/tinyexpr.h"
+
 #include <iostream>
 #include <cassert>
 #include <filesystem>
@@ -34,6 +36,107 @@ namespace ImGui {
 		glm::vec2 angles = glm::degrees(glm::polar(glm::vec3(direction)));
 		bool changed = ImGui::DragFloat2(label, glm::value_ptr(angles));
 		direction = glm::vec4(glm::euclidean(glm::radians(angles)), direction.w);
+		return changed;
+	}
+
+	// InputFloat with expression parsing (supports "pi", "2*pi", "sqrt(2)", etc.)
+	bool InputFloatExpr(const char* label, float* v, const char* format = "%.3f", ImGuiInputTextFlags flags = 0) {
+		// Create a unique ID for storing the text buffer
+		static std::map<ImGuiID, std::string> textBuffers;
+		ImGuiID id = ImGui::GetID(label);
+
+		// Initialize buffer if needed
+		if (textBuffers.find(id) == textBuffers.end()) {
+			char buf[64];
+			snprintf(buf, sizeof(buf), format, *v);
+			textBuffers[id] = buf;
+		}
+
+		// Show input text
+		bool changed = false;
+		if (ImGui::InputText(label, &textBuffers[id], flags | ImGuiInputTextFlags_EnterReturnsTrue)) {
+			// Try to parse as expression
+			int error;
+			double result = te_interp(textBuffers[id].c_str(), &error);
+			if (error == 0) {
+				*v = static_cast<float>(result);
+				changed = true;
+				// Update buffer to show evaluated value
+				char buf[64];
+				snprintf(buf, sizeof(buf), format, *v);
+				textBuffers[id] = buf;
+			}
+		}
+
+		// Also update if focus is lost and value changed
+		if (!ImGui::IsItemActive() && !ImGui::IsItemFocused()) {
+			int error;
+			double result = te_interp(textBuffers[id].c_str(), &error);
+			if (error == 0 && std::abs(static_cast<float>(result) - *v) > 1e-6f) {
+				*v = static_cast<float>(result);
+				changed = true;
+			}
+			// Always sync buffer to current value when not focused
+			char buf[64];
+			snprintf(buf, sizeof(buf), format, *v);
+			textBuffers[id] = buf;
+		}
+
+		return changed;
+	}
+
+	// Unified drag + expression widget (ctrl+click to type expressions, or drag to adjust)
+	bool DragFloatExpr(const char* label, float* v, float speed = 1.0f, float v_min = 0.0f, float v_max = 0.0f) {
+		static std::map<ImGuiID, std::string> editBuffers;
+		static std::map<ImGuiID, bool> isEditingText;
+		ImGuiID id = ImGui::GetID(label);
+
+		bool changed = false;
+		ImGui::SetNextItemWidth(-1);
+
+		// Check if we should enter text edit mode (ctrl+click was detected last frame)
+		bool wasEditing = isEditingText[id];
+		bool shouldEdit = wasEditing;
+
+		// Use DragFloat for normal dragging behavior
+		if (!shouldEdit) {
+			changed = ImGui::DragFloat(label, v, speed, v_min, v_max, "%.3f");
+
+			// Detect ctrl+click to enter edit mode
+			if (ImGui::IsItemActive() && ImGui::IsItemClicked() && ImGui::GetIO().KeyCtrl) {
+				isEditingText[id] = true;
+				char buf[64];
+				snprintf(buf, sizeof(buf), "%.3f", *v);
+				editBuffers[id] = buf;
+			}
+		} else {
+			// Text editing mode with expression parsing
+			ImGuiInputTextFlags flags = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll;
+
+			if (ImGui::InputText(label, &editBuffers[id], flags)) {
+				// User pressed Enter - parse as expression
+				int error;
+				double result = te_interp(editBuffers[id].c_str(), &error);
+				if (error == 0) {
+					*v = static_cast<float>(result);
+					changed = true;
+				}
+				isEditingText[id] = false;
+			}
+
+			// Exit edit mode if focus lost
+			if (!ImGui::IsItemActive() && !ImGui::IsItemFocused()) {
+				// Try to parse on focus loss too
+				int error;
+				double result = te_interp(editBuffers[id].c_str(), &error);
+				if (error == 0) {
+					*v = static_cast<float>(result);
+					changed = true;
+				}
+				isEditingText[id] = false;
+			}
+		}
+
 		return changed;
 	}
 } // namespace ImGui
@@ -1479,6 +1582,11 @@ void Application::compileFunctionDef(FunctionDefinition& fd) {
 			return;
 		}
 	}
+
+	// Auto-enable vector field overlay for R³→R³ functions
+	if (fd.inputDim == 3 && fd.outputDim == 3) {
+		fd.showVectorField = true;
+	}
 }
 
 // ─── Graph Objects ──────────────────────────────────────────────────────────
@@ -1493,8 +1601,8 @@ bool Application::initGraphObjects() {
 	helix.exprStrings[0] = "cos(t)";
 	helix.exprStrings[1] = "sin(t)";
 	helix.exprStrings[2] = "t/(2*pi)";
-	helix.rangeMin[0] = -5.0f;
-	helix.rangeMax[0] = 5.0f;
+	helix.rangeMin[0] = -6.283f;  // -2π to 2π for helix
+	helix.rangeMax[0] = 6.283f;
 	helix.resolution[0] = 200;
 	helix.tubeRadius = 0.03f;
 	helix.color[0] = 1.0f; helix.color[1] = 1.0f; helix.color[2] = 0.0f;
@@ -1594,10 +1702,11 @@ void Application::updateGraphObjects() {
 					fd.resolution[0], tubeRad, 8, col);
 				surfaceVerts.insert(surfaceVerts.end(), verts.begin(), verts.end());
 			} else {
-				// Wireframe: use line rendering
+				// Wireframe: use line rendering with purple color
+				vec3 wireframeColor(0.7f, 0.4f, 0.8f);
 				auto curveLineVerts = GraphObjects::generateParametricCurve(
 					curveFunc, fd.rangeMin[0], fd.rangeMax[0],
-					fd.resolution[0], col);
+					fd.resolution[0], wireframeColor);
 				lineVerts.insert(lineVerts.end(), curveLineVerts.begin(), curveLineVerts.end());
 			}
 
@@ -1645,12 +1754,13 @@ void Application::updateGraphObjects() {
 			};
 
 			if (fd.wireframe) {
-				// Wireframe: LineList via axes pipeline
+				// Wireframe: LineList via axes pipeline with purple color
+				vec3 wireframeColor(0.7f, 0.4f, 0.8f);
 				auto wfVerts = GraphObjects::generateParametricSurfaceWireframe(
 					surfFunc,
 					fd.rangeMin[0], fd.rangeMax[0],
 					fd.rangeMin[1], fd.rangeMax[1],
-					fd.resolution[0], fd.resolution[1], col);
+					fd.resolution[0], fd.resolution[1], wireframeColor);
 				lineVerts.insert(lineVerts.end(), wfVerts.begin(), wfVerts.end());
 			} else {
 				// Filled surface
@@ -1705,7 +1815,7 @@ void Application::updateGraphObjects() {
 		} else if (n == 3) {
 			vec3 rMin(fd.rangeMin[0], fd.rangeMin[1], fd.rangeMin[2]);
 			vec3 rMax(fd.rangeMax[0], fd.rangeMax[1], fd.rangeMax[2]);
-			glm::ivec3 res(fd.vfResolution);
+			glm::ivec3 res(fd.overlayVectorCount);  // Use overlayVectorCount for both arrows and streamlines
 
 			if (m == 1) {
 				// Scalar field: colored cubes
@@ -1848,7 +1958,7 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 				// Reset param names when inputDim changes
 				if (fd.inputDim != prevInputDim) {
 					if (fd.inputDim == 1) { fd.paramNames[0] = "t"; fd.paramNames[1] = ""; fd.paramNames[2] = ""; }
-					else if (fd.inputDim == 2) { fd.paramNames[0] = "u"; fd.paramNames[1] = "v"; fd.paramNames[2] = ""; }
+					else if (fd.inputDim == 2) { fd.paramNames[0] = "x"; fd.paramNames[1] = "y"; fd.paramNames[2] = ""; }  // Use x,y for surfaces
 					else { fd.paramNames[0] = "x"; fd.paramNames[1] = "y"; fd.paramNames[2] = "z"; }
 					// Clear extra expressions
 					for (int i = 0; i < 3; ++i) fd.exprStrings[i] = "";
@@ -1893,11 +2003,19 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 							{"Helix", {"cos(t)", "sin(t)", "t/(2*pi)"}},
 							{"Trefoil", {"sin(t)+2*sin(2*t)", "cos(t)-2*cos(2*t)", "-sin(3*t)"}},
 							{"Lissajous", {"2*sin(2*t)", "2*sin(3*t)", "2*cos(5*t)"}},
+							{"Straight Line", {"t", "t", "t"}},
+							{"Viviani", {"cos(t)^2", "cos(t)*sin(t)", "sin(t)"}},
+							{"Toroidal Spiral", {"(2+cos(3*t))*cos(t)", "(2+cos(3*t))*sin(t)", "sin(3*t)"}},
+							{"Conical Helix", {"t*cos(3*t)", "t*sin(3*t)", "t"}},
 						};
 						presetRanges = {
-							{0, 6.283f, 0, 0, 0, 0},      // 0 to 2π
-							{0, 6.283f, 0, 0, 0, 0},      // 0 to 2π
-							{0, 6.283f, 0, 0, 0, 0},      // 0 to 2π
+							{0, 6.283f, 0, 0, 0, 0},      // Helix: 0 to 2π
+							{0, 6.283f, 0, 0, 0, 0},      // Trefoil: 0 to 2π
+							{0, 6.283f, 0, 0, 0, 0},      // Lissajous: 0 to 2π
+							{-5, 5, 0, 0, 0, 0},          // Straight Line: -5 to 5
+							{0, 6.283f, 0, 0, 0, 0},      // Viviani: 0 to 2π
+							{0, 6.283f, 0, 0, 0, 0},      // Toroidal Spiral: 0 to 2π
+							{0, 6.283f, 0, 0, 0, 0},      // Conical Helix: 0 to 2π
 						};
 					} else if (n == 1 && m == 1) {
 						presets = {
@@ -1914,37 +2032,69 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 						presets = {
 							{"Circle", {"cos(t)", "sin(t)"}},
 							{"Lemniscate", {"cos(t)/(1+sin(t)^2)", "sin(t)*cos(t)/(1+sin(t)^2)"}},
+							{"Spiral", {"t*cos(t)", "t*sin(t)"}},
+							{"Rose (4-petal)", {"cos(2*t)*cos(t)", "cos(2*t)*sin(t)"}},
+							{"Cardioid", {"(1-cos(t))*cos(t)", "(1-cos(t))*sin(t)"}},
+							{"Butterfly", {"sin(t)*(exp(cos(t))-2*cos(4*t)-sin(t/12)^5)", "cos(t)*(exp(cos(t))-2*cos(4*t)-sin(t/12)^5)"}},
+							{"Epitrochoid", {"(5*cos(t)-2*cos(5*t/2))", "(5*sin(t)-2*sin(5*t/2))"}},
 						};
 						presetRanges = {
-							{0, 6.283f, 0, 0, 0, 0},      // 0 to 2π
-							{0, 6.283f, 0, 0, 0, 0},      // 0 to 2π
+							{0, 6.283f, 0, 0, 0, 0},      // Circle: 0 to 2π
+							{0, 6.283f, 0, 0, 0, 0},      // Lemniscate: 0 to 2π
+							{0, 12.566f, 0, 0, 0, 0},     // Spiral: 0 to 4π
+							{0, 6.283f, 0, 0, 0, 0},      // Rose: 0 to 2π
+							{0, 6.283f, 0, 0, 0, 0},      // Cardioid: 0 to 2π
+							{0, 12.566f, 0, 0, 0, 0},     // Butterfly: 0 to 4π
+							{0, 12.566f, 0, 0, 0, 0},     // Epitrochoid: 0 to 4π
 						};
 					} else if (n == 2 && m == 3) {
 						presets = {
 							{"Sphere", {"2*cos(u)*sin(v)", "2*sin(u)*sin(v)", "2*cos(v)"}},
 							{"Torus", {"(2+0.7*cos(v))*cos(u)", "(2+0.7*cos(v))*sin(u)", "0.7*sin(v)"}},
 							{"Mobius", {"(1+v/2*cos(u/2))*cos(u)", "(1+v/2*cos(u/2))*sin(u)", "v/2*sin(u/2)"}},
+							{"Hyperboloid", {"cosh(v)*cos(u)", "cosh(v)*sin(u)", "sinh(v)"}},
+							{"Klein Bottle", {"(2+cos(v/2)*sin(u)-sin(v/2)*sin(2*u))*cos(v)", "(2+cos(v/2)*sin(u)-sin(v/2)*sin(2*u))*sin(v)", "sin(v/2)*sin(u)+cos(v/2)*sin(2*u)"}},
+							{"Enneper", {"u-u^3/3+u*v^2", "v-v^3/3+v*u^2", "u^2-v^2"}},
+							{"Helicoid", {"u*cos(v)", "u*sin(v)", "v"}},
 						};
 						presetRanges = {
 							{0, 6.283f, 0, 3.1416f, 0, 0},   // Sphere: u=0 to 2π, v=0 to π
 							{0, 6.283f, 0, 6.283f, 0, 0},    // Torus: u=0 to 2π, v=0 to 2π
 							{0, 6.283f, -0.5f, 0.5f, 0, 0},  // Mobius: u=0 to 2π, v=-0.5 to 0.5
+							{0, 6.283f, -1.0f, 1.0f, 0, 0},  // Hyperboloid: u=0 to 2π, v=-1 to 1
+							{0, 6.283f, 0, 6.283f, 0, 0},    // Klein: u=0 to 2π, v=0 to 2π
+							{-2.0f, 2.0f, -2.0f, 2.0f, 0, 0}, // Enneper: u,v=-2 to 2
+							{-2.0f, 2.0f, -3.14f, 3.14f, 0, 0}, // Helicoid: u=-2 to 2, v=-π to π
 						};
 					} else if (n == 2 && m == 1) {
 						presets = {
-							{"sin(u)*cos(v)", {"sin(u)*cos(v)"}},
-							{"Ripple", {"sin(sqrt(u^2+v^2))"}},
-							{"Saddle", {"u^2-v^2"}},
+							{"sin(x)*cos(y)", {"sin(x)*cos(y)"}},
+							{"Ripple", {"sin(sqrt(x^2+y^2))"}},
+							{"Saddle", {"x^2-y^2"}},
+							{"Paraboloid", {"x^2+y^2"}},
+							{"Gaussian", {"exp(-(x^2+y^2))"}},
+							{"Monkey Saddle", {"x^3-3*x*y^2"}},
+							{"Valley", {"-(x^2+y^2)"}},
+							{"Waves", {"sin(x)+cos(y)"}},
+							{"Terrain", {"0.5*sin(2*x)+0.3*cos(3*y)+0.2*sin(x+y)"}},
+							{"Egg Carton", {"sin(x)*sin(y)"}},
 						};
 						presetRanges = {
-							{0, 6.283f, 0, 6.283f, 0, 0},    // sin: u,v = 0 to 2π
-							{-5, 5, -5, 5, 0, 0},             // Ripple: keep -5 to 5
-							{-5, 5, -5, 5, 0, 0},             // Saddle: keep -5 to 5
+							{0, 6.283f, 0, 6.283f, 0, 0},    // sin: x,y = 0 to 2π
+							{-10, 10, -10, 10, 0, 0},         // Ripple
+							{-3, 3, -3, 3, 0, 0},             // Saddle
+							{-3, 3, -3, 3, 0, 0},             // Paraboloid
+							{-3, 3, -3, 3, 0, 0},             // Gaussian
+							{-2, 2, -2, 2, 0, 0},             // Monkey Saddle
+							{-3, 3, -3, 3, 0, 0},             // Valley
+							{0, 6.283f, 0, 6.283f, 0, 0},    // Waves: x,y = 0 to 2π
+							{-5, 5, -5, 5, 0, 0},             // Terrain
+							{0, 6.283f, 0, 6.283f, 0, 0},    // Egg Carton: x,y = 0 to 2π
 						};
 					} else if (n == 2 && m == 2) {
 						presets = {
-							{"Identity", {"u", "v"}},
-							{"Swirl", {"u*cos(v)-v*sin(u)", "u*sin(v)+v*cos(u)"}},
+							{"Identity", {"x", "y"}},
+							{"Swirl", {"x*cos(y)-y*sin(x)", "x*sin(y)+y*cos(x)"}},
 						};
 						presetRanges = {
 							{-5, 5, -5, 5, 0, 0},
@@ -1955,27 +2105,55 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 							{"Rotation", {"-y", "x", "0"}},
 							{"Spiral", {"-y", "x", "sin(z)"}},
 							{"Radial", {"x/sqrt(x^2+y^2+z^2+0.01)", "y/sqrt(x^2+y^2+z^2+0.01)", "z/sqrt(x^2+y^2+z^2+0.01)"}},
+							{"Saddle", {"x", "-y", "0"}},
+							{"Vortex", {"-y", "x", "-z"}},
+							{"Shear", {"y", "0", "0"}},
+							{"Lorenz-like", {"10*(y-x)", "x*(28-z)-y", "x*y-8*z/3"}},
+							{"Dipole", {"3*x*z/(x^2+y^2+z^2+1)", "3*y*z/(x^2+y^2+z^2+1)", "(2*z^2-x^2-y^2)/(x^2+y^2+z^2+1)"}},
 						};
 						presetRanges = {
-							{-5, 5, -5, 5, -5, 5},
-							{-5, 5, -5, 5, -5, 5},
-							{-5, 5, -5, 5, -5, 5},
+							{-5, 5, -5, 5, -5, 5},        // Rotation
+							{-5, 5, -5, 5, -5, 5},        // Spiral
+							{-5, 5, -5, 5, -5, 5},        // Radial
+							{-5, 5, -5, 5, -5, 5},        // Saddle
+							{-5, 5, -5, 5, -5, 5},        // Vortex
+							{-5, 5, -5, 5, -5, 5},        // Shear
+							{-2, 2, -2, 2, -2, 2},        // Lorenz-like (smaller range)
+							{-3, 3, -3, 3, -3, 3},        // Dipole
 						};
 					} else if (n == 3 && m == 2) {
 						presets = {
 							{"Rotation 2D", {"-y", "x"}},
+							{"Saddle 2D", {"x", "-y"}},
+							{"Source 2D", {"x", "y"}},
+							{"Sink 2D", {"-x", "-y"}},
+							{"Spiral 2D", {"-y+x/5", "x+y/5"}},
 						};
 						presetRanges = {
-							{-5, 5, -5, 5, -5, 5},
+							{-5, 5, -5, 5, -5, 5},        // Rotation 2D
+							{-5, 5, -5, 5, -5, 5},        // Saddle 2D
+							{-5, 5, -5, 5, -5, 5},        // Source 2D
+							{-5, 5, -5, 5, -5, 5},        // Sink 2D
+							{-5, 5, -5, 5, -5, 5},        // Spiral 2D
 						};
 					} else if (n == 3 && m == 1) {
 						presets = {
 							{"Distance", {"sqrt(x^2+y^2+z^2)"}},
 							{"Sine Field", {"sin(x)*cos(y)*sin(z)"}},
+							{"Gaussian Blob", {"exp(-(x^2+y^2+z^2))"}},
+							{"Torus Potential", {"(sqrt(x^2+y^2)-2)^2+z^2"}},
+							{"Gyroid", {"sin(x)*cos(y)+sin(y)*cos(z)+sin(z)*cos(x)"}},
+							{"Waves 3D", {"sin(x)+sin(y)+sin(z)"}},
+							{"Saddle 3D", {"x^2+y^2-z^2"}},
 						};
 						presetRanges = {
-							{-5, 5, -5, 5, -5, 5},
-							{-5, 5, -5, 5, -5, 5},
+							{-5, 5, -5, 5, -5, 5},        // Distance
+							{-5, 5, -5, 5, -5, 5},        // Sine Field
+							{-3, 3, -3, 3, -3, 3},        // Gaussian Blob
+							{-4, 4, -4, 4, -4, 4},        // Torus Potential
+							{-3.14f, 3.14f, -3.14f, 3.14f, -3.14f, 3.14f}, // Gyroid
+							{-3.14f, 3.14f, -3.14f, 3.14f, -3.14f, 3.14f}, // Waves 3D
+							{-3, 3, -3, 3, -3, 3},        // Saddle 3D
 						};
 					}
 
@@ -2001,10 +2179,12 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 					}
 				}
 
-				// Range controls
+				// Range controls (drag + expression input)
 				if (fd.inputDim == 1) {
-					ImGui::Text("t min"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##tmin", &fd.rangeMin[0], 0.1f);
-					ImGui::Text("t max"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##tmax", &fd.rangeMax[0], 0.1f);
+					ImGui::Text("%s min", fd.paramNames[0].c_str());
+					dirty |= ImGui::DragFloatExpr("##p0min", &fd.rangeMin[0], 0.1f, -50.0f, 50.0f);
+					ImGui::Text("%s max", fd.paramNames[0].c_str());
+					dirty |= ImGui::DragFloatExpr("##p0max", &fd.rangeMax[0], 0.1f, -50.0f, 50.0f);
 					ImGui::Text("Segments"); ImGui::SameLine(); dirty |= ImGui::DragInt("##segments", &fd.resolution[0], 1.0f, 10, 500);
 					if (fd.outputDim != 2) {
 						ImGui::Text("Tube Radius"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##tuberadius", &fd.tubeRadius, 0.001f, 0.005f, 0.2f);
@@ -2016,17 +2196,29 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 						dirty |= ImGui::Combo("##plane", &fd.curvePlane, planes, 3);
 					}
 				} else if (fd.inputDim == 2) {
-					ImGui::Text("U Range"); ImGui::SameLine(); dirty |= ImGui::DragFloatRange2("##urange", &fd.rangeMin[0], &fd.rangeMax[0], 0.1f, -20.0f, 20.0f);
-					ImGui::Text("V Range"); ImGui::SameLine(); dirty |= ImGui::DragFloatRange2("##vrange", &fd.rangeMin[1], &fd.rangeMax[1], 0.1f, -20.0f, 20.0f);
-					ImGui::Text("U Res"); ImGui::SameLine(); dirty |= ImGui::DragInt("##ures", &fd.resolution[0], 1.0f, 4, 300);
-					ImGui::Text("V Res"); ImGui::SameLine(); dirty |= ImGui::DragInt("##vres", &fd.resolution[1], 1.0f, 4, 300);
+					ImGui::Text("%s min", fd.paramNames[0].c_str());
+					dirty |= ImGui::DragFloatExpr("##p0min", &fd.rangeMin[0], 0.1f, -50.0f, 50.0f);
+					ImGui::Text("%s max", fd.paramNames[0].c_str());
+					dirty |= ImGui::DragFloatExpr("##p0max", &fd.rangeMax[0], 0.1f, -50.0f, 50.0f);
+					ImGui::Text("%s min", fd.paramNames[1].c_str());
+					dirty |= ImGui::DragFloatExpr("##p1min", &fd.rangeMin[1], 0.1f, -50.0f, 50.0f);
+					ImGui::Text("%s max", fd.paramNames[1].c_str());
+					dirty |= ImGui::DragFloatExpr("##p1max", &fd.rangeMax[1], 0.1f, -50.0f, 50.0f);
+					ImGui::Text("%s Res", fd.paramNames[0].c_str()); ImGui::SameLine(); dirty |= ImGui::DragInt("##p0res", &fd.resolution[0], 1.0f, 4, 300);
+					ImGui::Text("%s Res", fd.paramNames[1].c_str()); ImGui::SameLine(); dirty |= ImGui::DragInt("##p1res", &fd.resolution[1], 1.0f, 4, 300);
 				} else if (fd.inputDim == 3) {
-					ImGui::Text("X Min"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##xmin", &fd.rangeMin[0], 0.1f, -20.0f, 0.0f);
-					ImGui::Text("X Max"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##xmax", &fd.rangeMax[0], 0.1f, 0.0f, 20.0f);
-					ImGui::Text("Y Min"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##ymin", &fd.rangeMin[1], 0.1f, -20.0f, 0.0f);
-					ImGui::Text("Y Max"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##ymax", &fd.rangeMax[1], 0.1f, 0.0f, 20.0f);
-					ImGui::Text("Z Min"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##zmin", &fd.rangeMin[2], 0.1f, -20.0f, 0.0f);
-					ImGui::Text("Z Max"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##zmax", &fd.rangeMax[2], 0.1f, 0.0f, 20.0f);
+					ImGui::Text("%s Min", fd.paramNames[0].c_str());
+					dirty |= ImGui::DragFloatExpr("##p0min", &fd.rangeMin[0], 0.1f, -50.0f, 50.0f);
+					ImGui::Text("%s Max", fd.paramNames[0].c_str());
+					dirty |= ImGui::DragFloatExpr("##p0max", &fd.rangeMax[0], 0.1f, -50.0f, 50.0f);
+					ImGui::Text("%s Min", fd.paramNames[1].c_str());
+					dirty |= ImGui::DragFloatExpr("##p1min", &fd.rangeMin[1], 0.1f, -50.0f, 50.0f);
+					ImGui::Text("%s Max", fd.paramNames[1].c_str());
+					dirty |= ImGui::DragFloatExpr("##p1max", &fd.rangeMax[1], 0.1f, -50.0f, 50.0f);
+					ImGui::Text("%s Min", fd.paramNames[2].c_str());
+					dirty |= ImGui::DragFloatExpr("##p2min", &fd.rangeMin[2], 0.1f, -50.0f, 50.0f);
+					ImGui::Text("%s Max", fd.paramNames[2].c_str());
+					dirty |= ImGui::DragFloatExpr("##p2max", &fd.rangeMax[2], 0.1f, -50.0f, 50.0f);
 					ImGui::Text("Resolution"); ImGui::SameLine(); dirty |= ImGui::DragInt("##vfres", &fd.vfResolution, 0.1f, 2, 10);
 					if (fd.outputDim >= 2) {
 						ImGui::Text("Arrow Scale"); ImGui::SameLine(); dirty |= ImGui::DragFloat("##arrowscale", &fd.arrowScale, 0.01f, 0.05f, 2.0f);
@@ -2034,6 +2226,8 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 				}
 
 				dirty |= ImGui::ColorEdit3("Color", fd.color);
+				ImGui::Text("Opacity"); ImGui::SameLine();
+				dirty |= ImGui::SliderFloat("##opacity", &fd.opacity, 0.0f, 1.0f);
 
 				// ── Overlay options ──
 				ImGui::Separator();
@@ -2111,8 +2305,7 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 			newFd.exprStrings[0] = "cos(t)";
 			newFd.exprStrings[1] = "sin(t)";
 			newFd.exprStrings[2] = "0";
-			newFd.rangeMin[0] = -5.0f;
-			newFd.rangeMax[0] = 5.0f;
+			// Use default range -10 to 10 (from FunctionDefinition struct)
 			newFd.resolution[0] = 200;
 			compileFunctionDef(newFd);
 			m_functions.push_back(std::move(newFd));
