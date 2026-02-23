@@ -1971,7 +1971,8 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 				ImGui::SameLine();
 
 				// Input dim selector
-				int prevInputDim = fd.inputDim;
+				int prevInputDim  = fd.inputDim;
+				int prevOutputDim = fd.outputDim;
 				ImGui::Text("In"); ImGui::SameLine();
 				ImGui::SetNextItemWidth(80);
 				const char* inputDimLabels[] = {"1", "2", "3"};
@@ -1990,13 +1991,48 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 					fd.outputDim = outputDimIdx + 1;
 					dirty = true;
 				}
+				ImGui::SameLine();
+				{
+					int n = fd.inputDim, m = fd.outputDim;
+					const char* vizLabel = "Unknown";
+					if      (n==1 && m==1) vizLabel = "Explicit Curve";
+					else if (n==1 && m==2) vizLabel = "Parametric Curve (2D)";
+					else if (n==1 && m==3) vizLabel = "Parametric Curve (3D)";
+					else if (n==2 && m==1) vizLabel = fd.renderImplicit ? "Implicit Curve"   : "Explicit Surface";
+					else if (n==2 && m==2) vizLabel = "Plane Map";
+					else if (n==2 && m==3) vizLabel = "Parametric Surface";
+					else if (n==3 && m==1) vizLabel = fd.renderImplicit ? "Implicit Surface" : "Scalar Field";
+					else if (n==3 && m==2) vizLabel = "Vector Field (2D)";
+					else if (n==3 && m==3) vizLabel = "Vector Field";
+					ImGui::TextDisabled("[ %s ]", vizLabel);
 
-				// Reset param names when inputDim changes
-				if (fd.inputDim != prevInputDim) {
-					if (fd.inputDim == 1) { fd.paramNames[0] = "t"; fd.paramNames[1] = ""; fd.paramNames[2] = ""; }
-					else if (fd.inputDim == 2) { fd.paramNames[0] = "x"; fd.paramNames[1] = "y"; fd.paramNames[2] = ""; }  // Use x,y for surfaces
-					else { fd.paramNames[0] = "x"; fd.paramNames[1] = "y"; fd.paramNames[2] = "z"; }
-					// Clear extra expressions
+					if (m == 1 && n >= 2) {
+						ImGui::SameLine();
+						dirty |= ImGui::Checkbox("Implicit##implicittoggle", &fd.renderImplicit);
+						if (fd.renderImplicit) {
+							ImGui::SameLine();
+							ImGui::Text("Isovalue"); ImGui::SameLine();
+							ImGui::SetNextItemWidth(80);
+							dirty |= ImGui::DragFloat("##isovalue", &fd.isovalue, 0.01f, -100.0f, 100.0f);
+						}
+					}
+				}
+
+				// Reset name + param names when either dim changes
+				if (fd.inputDim != prevInputDim || fd.outputDim != prevOutputDim) {
+					int n = fd.inputDim, m = fd.outputDim;
+					// Function name
+					if      (n == 1 && m >= 2)              fd.name = "r";
+					else if (n == 2 && m == 3)              fd.name = "s";
+					else if (n == 3 && m >= 2)              fd.name = "F";
+					else                                    fd.name = "f";
+					// Variable names
+					if      (n == 1 && m >= 2)              { fd.paramNames[0] = "t";  fd.paramNames[1] = "";  fd.paramNames[2] = ""; }
+					else if (n == 1)                        { fd.paramNames[0] = "x";  fd.paramNames[1] = "";  fd.paramNames[2] = ""; }
+					else if (n == 2 && m == 3)              { fd.paramNames[0] = "u";  fd.paramNames[1] = "v"; fd.paramNames[2] = ""; }
+					else if (n == 2)                        { fd.paramNames[0] = "x";  fd.paramNames[1] = "y"; fd.paramNames[2] = ""; }
+					else                                    { fd.paramNames[0] = "x";  fd.paramNames[1] = "y"; fd.paramNames[2] = "z"; }
+					// Clear expressions
 					for (int i = 0; i < 3; ++i) fd.exprStrings[i] = "";
 				}
 
@@ -2139,12 +2175,16 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 						ImGui::Unindent();
 					}
 					if (fd.outputDim == 1) {
-						dirty |= ImGui::Checkbox("Gradient Field", &fd.showGradientField);
+						if (!fd.renderImplicit) {
+							dirty |= ImGui::Checkbox("Gradient Field", &fd.showGradientField);
+						}
 					}
 				} else if (fd.inputDim == 3) {
 					// Vector/scalar field overlays
 					if (fd.outputDim == 1) {
-						dirty |= ImGui::Checkbox("Gradient Field", &fd.showGradientField);
+						if (!fd.renderImplicit) {
+							dirty |= ImGui::Checkbox("Gradient Field", &fd.showGradientField);
+						}
 					} else {
 						dirty |= ImGui::Checkbox("Vector Field", &fd.showVectorField);
 						dirty |= ImGui::Checkbox("Streamlines", &fd.showStreamlines);
@@ -2173,7 +2213,7 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 		// Add function button
 		if (ImGui::Button("+ Add Function")) {
 			FunctionDefinition newFd;
-			newFd.name = "f";
+			newFd.name = "r";
 			newFd.inputDim = 1;
 			newFd.outputDim = 3;
 			newFd.paramNames[0] = "t";
