@@ -40,6 +40,12 @@
 #include <vector>
 #include <utility>
 
+struct Preset {
+	std::string name;
+	std::vector<std::string> exprs;
+	std::array<float, 6> ranges = {0,0,0,0,0,0};
+};
+
 
 // Forward declare
 struct GLFWwindow;
@@ -170,6 +176,7 @@ private:
 	bool initGui(); // called in onInit
 	void terminateGui(); // called in onFinish
 	void updateGui(WGPURenderPassEncoder renderPass); // called in onFrame
+	void loadPresets();
 
 private:
 	// (Just aliases to make notations lighter)
@@ -329,4 +336,8 @@ private:
 	float m_axisColors[3][3] = {{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}};
 	float m_bgColor[3] = {0.6f, 0.6f, 0.7f};
 	bool m_axesDirty = false;
+	bool m_needsResize = false;
+
+	// Presets loaded from resources/presets.json, keyed by "n_m"
+	std::unordered_map<std::string, std::vector<Preset>> m_presets;
 };
