@@ -1,0 +1,77 @@
+{
+  "1_1": [
+    {"name": "sin(t)",     "exprs": ["sin(t)"],       "ranges": [-5, 5, 0, 0, 0, 0]},
+    {"name": "t^2",        "exprs": ["t^2"],           "ranges": [-5, 5, 0, 0, 0, 0]},
+    {"name": "exp(-t^2)",  "exprs": ["exp(-t^2)"],    "ranges": [-5, 5, 0, 0, 0, 0]}
+  ],
+  "1_2": [
+    {"name": "Circle",       "exprs": ["cos(t)", "sin(t)"],                                                                              "ranges": [0, 6.283, 0, 0, 0, 0]},
+    {"name": "Lemniscate",   "exprs": ["cos(t)/(1+sin(t)^2)", "sin(t)*cos(t)/(1+sin(t)^2)"],                                            "ranges": [0, 6.283, 0, 0, 0, 0]},
+    {"name": "Spiral",       "exprs": ["t*cos(t)", "t*sin(t)"],                                                                          "ranges": [0, 12.566, 0, 0, 0, 0]},
+    {"name": "Rose (4-petal)","exprs": ["cos(2*t)*cos(t)", "cos(2*t)*sin(t)"],                                                           "ranges": [0, 6.283, 0, 0, 0, 0]},
+    {"name": "Cardioid",     "exprs": ["(1-cos(t))*cos(t)", "(1-cos(t))*sin(t)"],                                                        "ranges": [0, 6.283, 0, 0, 0, 0]},
+    {"name": "Butterfly",    "exprs": ["sin(t)*(exp(cos(t))-2*cos(4*t)-sin(t/12)^5)", "cos(t)*(exp(cos(t))-2*cos(4*t)-sin(t/12)^5)"],   "ranges": [0, 12.566, 0, 0, 0, 0]},
+    {"name": "Epitrochoid",  "exprs": ["(5*cos(t)-2*cos(5*t/2))", "(5*sin(t)-2*sin(5*t/2))"],                                           "ranges": [0, 12.566, 0, 0, 0, 0]},
+    {"name": "Heart",        "exprs": ["16*sin(t)^3", "13*cos(t)-5*cos(2*t)-2*cos(3*t)-cos(4*t)"],                                      "ranges": [0, 6.283, 0, 0, 0, 0]}
+  ],
+  "1_3": [
+    {"name": "Helix",           "exprs": ["cos(t)", "sin(t)", "t/(2*pi)"],                                           "ranges": [0, 6.283, 0, 0, 0, 0]},
+    {"name": "Trefoil",         "exprs": ["sin(t)+2*sin(2*t)", "cos(t)-2*cos(2*t)", "-sin(3*t)"],                    "ranges": [0, 6.283, 0, 0, 0, 0]},
+    {"name": "Lissajous",       "exprs": ["2*sin(2*t)", "2*sin(3*t)", "2*cos(5*t)"],                                 "ranges": [0, 6.283, 0, 0, 0, 0]},
+    {"name": "Straight Line",   "exprs": ["t", "t", "t"],                                                            "ranges": [-5, 5, 0, 0, 0, 0]},
+    {"name": "Viviani",         "exprs": ["cos(t)^2", "cos(t)*sin(t)", "sin(t)"],                                    "ranges": [0, 6.283, 0, 0, 0, 0]},
+    {"name": "Toroidal Spiral", "exprs": ["(2+cos(3*t))*cos(t)", "(2+cos(3*t))*sin(t)", "sin(3*t)"],                 "ranges": [0, 6.283, 0, 0, 0, 0]},
+    {"name": "Conical Helix",   "exprs": ["t*cos(3*t)", "t*sin(3*t)", "t"],                                          "ranges": [0, 6.283, 0, 0, 0, 0]}
+  ],
+  "2_1": [
+    {"name": "sin(x)*cos(y)", "exprs": ["sin(x)*cos(y)"],                                  "ranges": [0, 6.283, 0, 6.283, 0, 0]},
+    {"name": "Ripple",        "exprs": ["sin(sqrt(x^2+y^2))"],                             "ranges": [-10, 10, -10, 10, 0, 0]},
+    {"name": "Saddle",        "exprs": ["x^2-y^2"],                                        "ranges": [-3, 3, -3, 3, 0, 0]},
+    {"name": "Paraboloid",    "exprs": ["x^2+y^2"],                                        "ranges": [-3, 3, -3, 3, 0, 0]},
+    {"name": "Gaussian",      "exprs": ["exp(-(x^2+y^2))"],                                "ranges": [-3, 3, -3, 3, 0, 0]},
+    {"name": "Monkey Saddle", "exprs": ["x^3-3*x*y^2"],                                    "ranges": [-2, 2, -2, 2, 0, 0]},
+    {"name": "Valley",        "exprs": ["-(x^2+y^2)"],                                     "ranges": [-3, 3, -3, 3, 0, 0]},
+    {"name": "Waves",         "exprs": ["sin(x)+cos(y)"],                                  "ranges": [0, 6.283, 0, 6.283, 0, 0]},
+    {"name": "Terrain",       "exprs": ["0.5*sin(2*x)+0.3*cos(3*y)+0.2*sin(x+y)"],        "ranges": [-5, 5, -5, 5, 0, 0]},
+    {"name": "Egg Carton",    "exprs": ["sin(x)*sin(y)"],                                  "ranges": [0, 6.283, 0, 6.283, 0, 0]}
+  ],
+  "2_2": [
+    {"name": "Identity", "exprs": ["x", "y"],                                    "ranges": [-5, 5, -5, 5, 0, 0]},
+    {"name": "Swirl",    "exprs": ["x*cos(y)-y*sin(x)", "x*sin(y)+y*cos(x)"],   "ranges": [-5, 5, -5, 5, 0, 0]}
+  ],
+  "2_3": [
+    {"name": "Sphere",       "exprs": ["2*cos(u)*sin(v)", "2*sin(u)*sin(v)", "2*cos(v)"],                                                                                      "ranges": [0, 6.283, 0, 3.1416, 0, 0]},
+    {"name": "Torus",        "exprs": ["(2+0.7*cos(v))*cos(u)", "(2+0.7*cos(v))*sin(u)", "0.7*sin(v)"],                                                                        "ranges": [0, 6.283, 0, 6.283, 0, 0]},
+    {"name": "Mobius",       "exprs": ["(1+v/2*cos(u/2))*cos(u)", "(1+v/2*cos(u/2))*sin(u)", "v/2*sin(u/2)"],                                                                  "ranges": [0, 6.283, -0.5, 0.5, 0, 0]},
+    {"name": "Hyperboloid",  "exprs": ["cosh(v)*cos(u)", "cosh(v)*sin(u)", "sinh(v)"],                                                                                          "ranges": [0, 6.283, -1.0, 1.0, 0, 0]},
+    {"name": "Klein Bottle", "exprs": ["(2+cos(v/2)*sin(u)-sin(v/2)*sin(2*u))*cos(v)", "(2+cos(v/2)*sin(u)-sin(v/2)*sin(2*u))*sin(v)", "sin(v/2)*sin(u)+cos(v/2)*sin(2*u)"],  "ranges": [0, 6.283, 0, 6.283, 0, 0]},
+    {"name": "Enneper",      "exprs": ["u-u^3/3+u*v^2", "v-v^3/3+v*u^2", "u^2-v^2"],                                                                                          "ranges": [-2.0, 2.0, -2.0, 2.0, 0, 0]},
+    {"name": "Helicoid",     "exprs": ["u*cos(v)", "u*sin(v)", "v"],                                                                                                            "ranges": [-2.0, 2.0, -3.14, 3.14, 0, 0]}
+  ],
+  "3_1": [
+    {"name": "Distance",       "exprs": ["sqrt(x^2+y^2+z^2)"],                               "ranges": [-5, 5, -5, 5, -5, 5]},
+    {"name": "Sine Field",     "exprs": ["sin(x)*cos(y)*sin(z)"],                             "ranges": [-5, 5, -5, 5, -5, 5]},
+    {"name": "Gaussian Blob",  "exprs": ["exp(-(x^2+y^2+z^2))"],                             "ranges": [-3, 3, -3, 3, -3, 3]},
+    {"name": "Torus Potential","exprs": ["(sqrt(x^2+y^2)-2)^2+z^2"],                         "ranges": [-4, 4, -4, 4, -4, 4]},
+    {"name": "Gyroid",         "exprs": ["sin(x)*cos(y)+sin(y)*cos(z)+sin(z)*cos(x)"],       "ranges": [-3.14, 3.14, -3.14, 3.14, -3.14, 3.14]},
+    {"name": "Waves 3D",       "exprs": ["sin(x)+sin(y)+sin(z)"],                             "ranges": [-3.14, 3.14, -3.14, 3.14, -3.14, 3.14]},
+    {"name": "Saddle 3D",      "exprs": ["x^2+y^2-z^2"],                                     "ranges": [-3, 3, -3, 3, -3, 3]}
+  ],
+  "3_2": [
+    {"name": "Rotation 2D", "exprs": ["-y", "x"],          "ranges": [-5, 5, -5, 5, -5, 5]},
+    {"name": "Saddle 2D",   "exprs": ["x", "-y"],          "ranges": [-5, 5, -5, 5, -5, 5]},
+    {"name": "Source 2D",   "exprs": ["x", "y"],           "ranges": [-5, 5, -5, 5, -5, 5]},
+    {"name": "Sink 2D",     "exprs": ["-x", "-y"],         "ranges": [-5, 5, -5, 5, -5, 5]},
+    {"name": "Spiral 2D",   "exprs": ["-y+x/5", "x+y/5"], "ranges": [-5, 5, -5, 5, -5, 5]}
+  ],
+  "3_3": [
+    {"name": "Rotation",    "exprs": ["-y", "x", "0"],                                                                                                           "ranges": [-5, 5, -5, 5, -5, 5]},
+    {"name": "Spiral",      "exprs": ["-y", "x", "sin(z)"],                                                                                                      "ranges": [-5, 5, -5, 5, -5, 5]},
+    {"name": "Radial",      "exprs": ["x/sqrt(x^2+y^2+z^2+0.01)", "y/sqrt(x^2+y^2+z^2+0.01)", "z/sqrt(x^2+y^2+z^2+0.01)"],                                     "ranges": [-5, 5, -5, 5, -5, 5]},
+    {"name": "Saddle",      "exprs": ["x", "-y", "0"],                                                                                                            "ranges": [-5, 5, -5, 5, -5, 5]},
+    {"name": "Vortex",      "exprs": ["-y", "x", "-z"],                                                                                                           "ranges": [-5, 5, -5, 5, -5, 5]},
+    {"name": "Shear",       "exprs": ["y", "0", "0"],                                                                                                             "ranges": [-5, 5, -5, 5, -5, 5]},
+    {"name": "Lorenz-like", "exprs": ["10*(y-x)", "x*(28-z)-y", "x*y-8*z/3"],                                                                                    "ranges": [-2, 2, -2, 2, -2, 2]},
+    {"name": "Dipole",      "exprs": ["3*x*z/(x^2+y^2+z^2+1)", "3*y*z/(x^2+y^2+z^2+1)", "(2*z^2-x^2-y^2)/(x^2+y^2+z^2+1)"],                                   "ranges": [-3, 3, -3, 3, -3, 3]}
+  ]
+}

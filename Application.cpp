@@ -21,10 +21,14 @@
 #include <iostream>
 #include <cassert>
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <array>
 #include <cmath>
 #include <map>
+
+#include "json.hpp"
+using json = nlohmann::json;
 
 using VertexAttributes = ResourceManager::VertexAttributes;
 
@@ -178,6 +182,7 @@ bool Application::onInit() {
 	if (!initBindGroup()) return false;
 	if (!initGraphObjects()) return false;
 	if (!initGui()) return false;
+	loadPresets();
 	return true;
 }
 
@@ -202,6 +207,10 @@ void Application::processPendingReleases() {
 
 void Application::onFrame() {
 	glfwPollEvents();
+	if (m_needsResize) {
+		m_needsResize = false;
+		onResize();
+	}
 	processPendingReleases();
 	updateDragInertia();
 	updateLightingUniforms();
@@ -566,7 +575,7 @@ bool Application::initWindowAndDevice() {
 	glfwSetWindowUserPointer(m_window, this);
 	glfwSetFramebufferSizeCallback(m_window, [](GLFWwindow* window, int, int) {
 		auto that = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
-		if (that != nullptr) that->onResize();
+		if (that != nullptr) that->m_needsResize = true;
 	});
 	glfwSetCursorPosCallback(m_window, [](GLFWwindow* window, double xpos, double ypos) {
 		auto that = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
@@ -1885,6 +1894,33 @@ void Application::updateGraphObjects() {
 	}
 }
 
+void Application::loadPresets() {
+	std::string path = std::string(RESOURCE_DIR) + "/presets.json";
+	std::ifstream f(path);
+	if (!f.is_open()) {
+		std::cerr << "Warning: could not open " << path << std::endl;
+		return;
+	}
+	try {
+		json j = json::parse(f);
+		for (auto& [key, arr] : j.items()) {
+			std::vector<Preset> list;
+			for (auto& entry : arr) {
+				Preset p;
+				p.name = entry["name"].get<std::string>();
+				p.exprs = entry["exprs"].get<std::vector<std::string>>();
+				auto r = entry["ranges"].get<std::vector<float>>();
+				for (int i = 0; i < 6 && i < (int)r.size(); ++i) p.ranges[i] = r[i];
+				list.push_back(std::move(p));
+			}
+			m_presets[key] = std::move(list);
+		}
+		std::cout << "Loaded presets from " << path << std::endl;
+	} catch (const std::exception& e) {
+		std::cerr << "Error parsing presets.json: " << e.what() << std::endl;
+	}
+}
+
 bool Application::initGui() {
 	// Setup Dear ImGui context
 	IMGUI_CHECKVERSION();
@@ -1992,193 +2028,32 @@ void Application::updateGui(WGPURenderPassEncoder renderPass) {
 					ImGui::PopStyleColor();
 				}
 
-				// Presets
+				// Presets (loaded from resources/presets.json)
 				{
 					int n = fd.inputDim, m = fd.outputDim;
-					std::vector<std::pair<std::string, std::vector<std::string>>> presets;
-					std::vector<std::array<float, 6>> presetRanges; // min0,max0,min1,max1,min2,max2
-
-					if (n == 1 && m == 3) {
-						presets = {
-							{"Helix", {"cos(t)", "sin(t)", "t/(2*pi)"}},
-							{"Trefoil", {"sin(t)+2*sin(2*t)", "cos(t)-2*cos(2*t)", "-sin(3*t)"}},
-							{"Lissajous", {"2*sin(2*t)", "2*sin(3*t)", "2*cos(5*t)"}},
-							{"Straight Line", {"t", "t", "t"}},
-							{"Viviani", {"cos(t)^2", "cos(t)*sin(t)", "sin(t)"}},
-							{"Toroidal Spiral", {"(2+cos(3*t))*cos(t)", "(2+cos(3*t))*sin(t)", "sin(3*t)"}},
-							{"Conical Helix", {"t*cos(3*t)", "t*sin(3*t)", "t"}},
-						};
-						presetRanges = {
-							{0, 6.283f, 0, 0, 0, 0},      // Helix: 0 to 2π
-							{0, 6.283f, 0, 0, 0, 0},      // Trefoil: 0 to 2π
-							{0, 6.283f, 0, 0, 0, 0},      // Lissajous: 0 to 2π
-							{-5, 5, 0, 0, 0, 0},          // Straight Line: -5 to 5
-							{0, 6.283f, 0, 0, 0, 0},      // Viviani: 0 to 2π
-							{0, 6.283f, 0, 0, 0, 0},      // Toroidal Spiral: 0 to 2π
-							{0, 6.283f, 0, 0, 0, 0},      // Conical Helix: 0 to 2π
-						};
-					} else if (n == 1 && m == 1) {
-						presets = {
-							{"sin(t)", {"sin(t)"}},
-							{"t^2", {"t^2"}},
-							{"exp(-t^2)", {"exp(-t^2)"}},
-						};
-						presetRanges = {
-							{-5, 5, 0, 0, 0, 0},
-							{-5, 5, 0, 0, 0, 0},
-							{-5, 5, 0, 0, 0, 0},
-						};
-					} else if (n == 1 && m == 2) {
-						presets = {
-							{"Circle", {"cos(t)", "sin(t)"}},
-							{"Lemniscate", {"cos(t)/(1+sin(t)^2)", "sin(t)*cos(t)/(1+sin(t)^2)"}},
-							{"Spiral", {"t*cos(t)", "t*sin(t)"}},
-							{"Rose (4-petal)", {"cos(2*t)*cos(t)", "cos(2*t)*sin(t)"}},
-							{"Cardioid", {"(1-cos(t))*cos(t)", "(1-cos(t))*sin(t)"}},
-							{"Butterfly", {"sin(t)*(exp(cos(t))-2*cos(4*t)-sin(t/12)^5)", "cos(t)*(exp(cos(t))-2*cos(4*t)-sin(t/12)^5)"}},
-							{"Epitrochoid", {"(5*cos(t)-2*cos(5*t/2))", "(5*sin(t)-2*sin(5*t/2))"}},
-						};
-						presetRanges = {
-							{0, 6.283f, 0, 0, 0, 0},      // Circle: 0 to 2π
-							{0, 6.283f, 0, 0, 0, 0},      // Lemniscate: 0 to 2π
-							{0, 12.566f, 0, 0, 0, 0},     // Spiral: 0 to 4π
-							{0, 6.283f, 0, 0, 0, 0},      // Rose: 0 to 2π
-							{0, 6.283f, 0, 0, 0, 0},      // Cardioid: 0 to 2π
-							{0, 12.566f, 0, 0, 0, 0},     // Butterfly: 0 to 4π
-							{0, 12.566f, 0, 0, 0, 0},     // Epitrochoid: 0 to 4π
-						};
-					} else if (n == 2 && m == 3) {
-						presets = {
-							{"Sphere", {"2*cos(u)*sin(v)", "2*sin(u)*sin(v)", "2*cos(v)"}},
-							{"Torus", {"(2+0.7*cos(v))*cos(u)", "(2+0.7*cos(v))*sin(u)", "0.7*sin(v)"}},
-							{"Mobius", {"(1+v/2*cos(u/2))*cos(u)", "(1+v/2*cos(u/2))*sin(u)", "v/2*sin(u/2)"}},
-							{"Hyperboloid", {"cosh(v)*cos(u)", "cosh(v)*sin(u)", "sinh(v)"}},
-							{"Klein Bottle", {"(2+cos(v/2)*sin(u)-sin(v/2)*sin(2*u))*cos(v)", "(2+cos(v/2)*sin(u)-sin(v/2)*sin(2*u))*sin(v)", "sin(v/2)*sin(u)+cos(v/2)*sin(2*u)"}},
-							{"Enneper", {"u-u^3/3+u*v^2", "v-v^3/3+v*u^2", "u^2-v^2"}},
-							{"Helicoid", {"u*cos(v)", "u*sin(v)", "v"}},
-						};
-						presetRanges = {
-							{0, 6.283f, 0, 3.1416f, 0, 0},   // Sphere: u=0 to 2π, v=0 to π
-							{0, 6.283f, 0, 6.283f, 0, 0},    // Torus: u=0 to 2π, v=0 to 2π
-							{0, 6.283f, -0.5f, 0.5f, 0, 0},  // Mobius: u=0 to 2π, v=-0.5 to 0.5
-							{0, 6.283f, -1.0f, 1.0f, 0, 0},  // Hyperboloid: u=0 to 2π, v=-1 to 1
-							{0, 6.283f, 0, 6.283f, 0, 0},    // Klein: u=0 to 2π, v=0 to 2π
-							{-2.0f, 2.0f, -2.0f, 2.0f, 0, 0}, // Enneper: u,v=-2 to 2
-							{-2.0f, 2.0f, -3.14f, 3.14f, 0, 0}, // Helicoid: u=-2 to 2, v=-π to π
-						};
-					} else if (n == 2 && m == 1) {
-						presets = {
-							{"sin(x)*cos(y)", {"sin(x)*cos(y)"}},
-							{"Ripple", {"sin(sqrt(x^2+y^2))"}},
-							{"Saddle", {"x^2-y^2"}},
-							{"Paraboloid", {"x^2+y^2"}},
-							{"Gaussian", {"exp(-(x^2+y^2))"}},
-							{"Monkey Saddle", {"x^3-3*x*y^2"}},
-							{"Valley", {"-(x^2+y^2)"}},
-							{"Waves", {"sin(x)+cos(y)"}},
-							{"Terrain", {"0.5*sin(2*x)+0.3*cos(3*y)+0.2*sin(x+y)"}},
-							{"Egg Carton", {"sin(x)*sin(y)"}},
-						};
-						presetRanges = {
-							{0, 6.283f, 0, 6.283f, 0, 0},    // sin: x,y = 0 to 2π
-							{-10, 10, -10, 10, 0, 0},         // Ripple
-							{-3, 3, -3, 3, 0, 0},             // Saddle
-							{-3, 3, -3, 3, 0, 0},             // Paraboloid
-							{-3, 3, -3, 3, 0, 0},             // Gaussian
-							{-2, 2, -2, 2, 0, 0},             // Monkey Saddle
-							{-3, 3, -3, 3, 0, 0},             // Valley
-							{0, 6.283f, 0, 6.283f, 0, 0},    // Waves: x,y = 0 to 2π
-							{-5, 5, -5, 5, 0, 0},             // Terrain
-							{0, 6.283f, 0, 6.283f, 0, 0},    // Egg Carton: x,y = 0 to 2π
-						};
-					} else if (n == 2 && m == 2) {
-						presets = {
-							{"Identity", {"x", "y"}},
-							{"Swirl", {"x*cos(y)-y*sin(x)", "x*sin(y)+y*cos(x)"}},
-						};
-						presetRanges = {
-							{-5, 5, -5, 5, 0, 0},
-							{-5, 5, -5, 5, 0, 0},
-						};
-					} else if (n == 3 && m == 3) {
-						presets = {
-							{"Rotation", {"-y", "x", "0"}},
-							{"Spiral", {"-y", "x", "sin(z)"}},
-							{"Radial", {"x/sqrt(x^2+y^2+z^2+0.01)", "y/sqrt(x^2+y^2+z^2+0.01)", "z/sqrt(x^2+y^2+z^2+0.01)"}},
-							{"Saddle", {"x", "-y", "0"}},
-							{"Vortex", {"-y", "x", "-z"}},
-							{"Shear", {"y", "0", "0"}},
-							{"Lorenz-like", {"10*(y-x)", "x*(28-z)-y", "x*y-8*z/3"}},
-							{"Dipole", {"3*x*z/(x^2+y^2+z^2+1)", "3*y*z/(x^2+y^2+z^2+1)", "(2*z^2-x^2-y^2)/(x^2+y^2+z^2+1)"}},
-						};
-						presetRanges = {
-							{-5, 5, -5, 5, -5, 5},        // Rotation
-							{-5, 5, -5, 5, -5, 5},        // Spiral
-							{-5, 5, -5, 5, -5, 5},        // Radial
-							{-5, 5, -5, 5, -5, 5},        // Saddle
-							{-5, 5, -5, 5, -5, 5},        // Vortex
-							{-5, 5, -5, 5, -5, 5},        // Shear
-							{-2, 2, -2, 2, -2, 2},        // Lorenz-like (smaller range)
-							{-3, 3, -3, 3, -3, 3},        // Dipole
-						};
-					} else if (n == 3 && m == 2) {
-						presets = {
-							{"Rotation 2D", {"-y", "x"}},
-							{"Saddle 2D", {"x", "-y"}},
-							{"Source 2D", {"x", "y"}},
-							{"Sink 2D", {"-x", "-y"}},
-							{"Spiral 2D", {"-y+x/5", "x+y/5"}},
-						};
-						presetRanges = {
-							{-5, 5, -5, 5, -5, 5},        // Rotation 2D
-							{-5, 5, -5, 5, -5, 5},        // Saddle 2D
-							{-5, 5, -5, 5, -5, 5},        // Source 2D
-							{-5, 5, -5, 5, -5, 5},        // Sink 2D
-							{-5, 5, -5, 5, -5, 5},        // Spiral 2D
-						};
-					} else if (n == 3 && m == 1) {
-						presets = {
-							{"Distance", {"sqrt(x^2+y^2+z^2)"}},
-							{"Sine Field", {"sin(x)*cos(y)*sin(z)"}},
-							{"Gaussian Blob", {"exp(-(x^2+y^2+z^2))"}},
-							{"Torus Potential", {"(sqrt(x^2+y^2)-2)^2+z^2"}},
-							{"Gyroid", {"sin(x)*cos(y)+sin(y)*cos(z)+sin(z)*cos(x)"}},
-							{"Waves 3D", {"sin(x)+sin(y)+sin(z)"}},
-							{"Saddle 3D", {"x^2+y^2-z^2"}},
-						};
-						presetRanges = {
-							{-5, 5, -5, 5, -5, 5},        // Distance
-							{-5, 5, -5, 5, -5, 5},        // Sine Field
-							{-3, 3, -3, 3, -3, 3},        // Gaussian Blob
-							{-4, 4, -4, 4, -4, 4},        // Torus Potential
-							{-3.14f, 3.14f, -3.14f, 3.14f, -3.14f, 3.14f}, // Gyroid
-							{-3.14f, 3.14f, -3.14f, 3.14f, -3.14f, 3.14f}, // Waves 3D
-							{-3, 3, -3, 3, -3, 3},        // Saddle 3D
-						};
-					}
-
-					if (!presets.empty()) {
+					std::string presetKey = std::to_string(n) + "_" + std::to_string(m);
+					auto presetIt = m_presets.find(presetKey);
+					if (presetIt != m_presets.end() && !presetIt->second.empty()) {
+						auto& presetList = presetIt->second;
 						std::vector<const char*> presetNames;
 						presetNames.push_back("(Custom)");
-						for (auto& p : presets) presetNames.push_back(p.first.c_str());
-
+						for (auto& p : presetList) presetNames.push_back(p.name.c_str());
 						int presetIdx = 0;
 						if (ImGui::Combo("Preset##preset", &presetIdx, presetNames.data(), (int)presetNames.size())) {
 							if (presetIdx > 0) {
-								auto& p = presets[presetIdx - 1];
-								for (int i = 0; i < (int)p.second.size() && i < 3; ++i) {
-									fd.exprStrings[i] = p.second[i];
-								}
-								auto& r = presetRanges[presetIdx - 1];
-								fd.rangeMin[0] = r[0]; fd.rangeMax[0] = r[1];
-								if (fd.inputDim >= 2) { fd.rangeMin[1] = r[2]; fd.rangeMax[1] = r[3]; }
-								if (fd.inputDim >= 3) { fd.rangeMin[2] = r[4]; fd.rangeMax[2] = r[5]; }
+								auto& p = presetList[presetIdx - 1];
+								for (int i = 0; i < (int)p.exprs.size() && i < 3; ++i)
+									fd.exprStrings[i] = p.exprs[i];
+								fd.rangeMin[0] = p.ranges[0]; fd.rangeMax[0] = p.ranges[1];
+								if (fd.inputDim >= 2) { fd.rangeMin[1] = p.ranges[2]; fd.rangeMax[1] = p.ranges[3]; }
+								if (fd.inputDim >= 3) { fd.rangeMin[2] = p.ranges[4]; fd.rangeMax[2] = p.ranges[5]; }
 								dirty = true;
 							}
 						}
 					}
 				}
 
+	
 				// Range controls (drag + expression input)
 				if (fd.inputDim == 1) {
 					ImGui::Text("%s min", fd.paramNames[0].c_str());
